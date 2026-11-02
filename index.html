@@ -1,0 +1,1759 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>RTS AI</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden}body{background:#15272b;color:#fff;font-family:Arial,sans-serif}
+.game-layout{position:fixed;inset:0;display:grid;grid-template-columns:minmax(0,1fr) 280px}.battlefield-area{position:relative;min-width:0;min-height:0;background:#15272b;overflow:hidden}
+#battlefield{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:block;touch-action:none}.sidebar{padding:12px;background:#26323b;border-left:2px solid #52616b;overflow:auto;min-width:0}
+.sidebar-tabs{display:flex;gap:8px;margin-bottom:12px}.sidebar-tab{flex:1;padding:12px;background:#26323b;color:#c2ccd3;border:1px solid #8195a3;border-radius:4px;cursor:pointer}.sidebar-tab.active{background:#41647e;color:white;border-color:#82c4ff}
+.building-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-auto-rows:130px;gap:8px;align-content:start}.building-button{position:relative;width:100%;height:130px;min-width:0;padding:6px;display:flex;flex-direction:column;align-items:stretch;justify-content:space-between;background:#3a4d5c;color:white;border:1px solid #8195a3;border-radius:4px;font-size:12px;cursor:pointer;overflow:hidden}.building-button:hover{background:#506c80}.building-button:disabled,.building-button.unavailable{opacity:.5;cursor:not-allowed}.building-button canvas{display:block;width:100%;height:66px;object-fit:contain;flex-shrink:0}.building-button span:not(.queue-count){min-height:36px;flex-shrink:0}.building-button span{text-align:center;line-height:18px;white-space:pre-line}.sidebar [hidden]{display:none!important}
+.unit-production-button,.building-button{isolation:isolate;--progress-angle:0deg}.unit-production-button:before,.building-button:before{content:"";position:absolute;inset:0;background:conic-gradient(from 0deg,rgba(113,204,255,.55) 0deg var(--progress-angle),transparent var(--progress-angle) 360deg);opacity:0;pointer-events:none}.unit-production-button.is-producing:before,.building-button.is-producing:before{opacity:1}.unit-button-label,.building-button span{position:relative;z-index:1}.building-button .queue-count{position:absolute;right:6px;bottom:4px;z-index:2;background:none;padding:0;border:0;border-radius:0;line-height:18px}.unit-button-label{padding-inline:12px}
+#result{position:absolute;inset:0;background:#0e1e2bd9;display:grid;place-content:center;text-align:center;z-index:4}#result[hidden]{display:none}#result button{padding:12px;background:#41647e;color:#fff;border:1px solid #82c4ff;cursor:pointer}
+@media(max-width:700px){.game-layout{grid-template-columns:1fr;grid-template-rows:minmax(240px,60vh) 1fr}.sidebar{border-left:0;border-top:1px solid #52616b}.building-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.building-button{font-size:12px}}
+
+.resource-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;white-space:nowrap;margin-bottom:12px;color:#ead398;font-size:14px;font-variant-numeric:tabular-nums}.resource-bar strong{font-weight:400}.resource-bar .low-power{color:#ff9788}.train-ai{width:100%;margin-top:16px;padding:10px;background:#365569;color:#edf6fc;border:1px solid #7597ac;border-radius:4px;cursor:pointer;font-size:13px}.building-button.ready-building{border-color:#9ee5b3;background:#335a4a}
+.match-controls{display:flex;gap:8px}.match-controls 
+.train-ai{flex:1;min-width:0}#trainingResults{
+white-space:pre-line;
+font-size:13px;line-height:1.7;margin-top:10px;color:#d7e6ed}
+#buildingPanel .building-grid{
+grid-auto-rows:148px}#buildingPanel 
+.building-button{height:148px}
+#buildingPanel .building-button span:not(.queue-count){
+min-height:54px}</style></head><body><div class="game-layout">
+<main class="battlefield-area">
+<canvas id="battlefield" width="1600" height="900" aria-label="RTS AI">RTS AI</canvas>
+<div id="result" hidden><h2 id="resultText"></h2><button id="playAgain">再玩一場</button></div>
+</main>
+<aside class="sidebar"><div class="resource-bar"><span>資金<strong id="funds">$1,600</strong></span><span>電力 <strong id="power">0/0</strong></span></div><div class="sidebar-tabs"><button id="buildingTab" class="sidebar-tab active" aria-pressed="true">建築</button><button id="unitTab" class="sidebar-tab" aria-pressed="false">單位</button></div><div id="buildingPanel"><div class="building-grid"><button id="buildPowerPlant" class="building-button">發電廠</button><button id="buildBarracks" class="building-button">兵營</button><button id="buildRefinery" class="building-button">精煉廠</button><button id="buildAirTower" class="building-button">航空塔</button><button id="buildFactory" class="building-button">戰車工廠</button></div></div><div id="unitPanel" hidden><div id="unitButtons" class="building-grid"></div></div><div class="match-controls"><button id="pauseGame" class="train-ai">暫停</button><button id="restartGame" class="train-ai">重新開始</button></div><button id="trainAI" class="train-ai">訓練深度學習AI ×1000</button><div id="trainingResults" hidden aria-live="polite"></div></aside></div>
+<script>
+(() => {
+    "use strict";
+
+    const canvas = document.querySelector("#battlefield");
+    let ctx = canvas.getContext("2d");
+    const W = 1600;
+    const H = 900;
+    const TEAM = 0;
+
+    let id = 1;
+    let last = 0;
+    let placing = null;
+    let matchEnded = false;
+    const BUILD_RADIUS = 240;
+    const COST = {powerPlant:300, refinery:600, factory:600, barracks:500, tank:250, harvester:400, antiAir:250, machineGunner:100, rocketSoldier:150,airTower:800,helicopter:500,fighter:500};
+    const TECH = {powerPlant:[],barracks:['powerPlant'],refinery:['powerPlant'],factory:['refinery'],airTower:['factory']};
+    const BUILD_TYPES = ['powerPlant','barracks','refinery','factory','airTower'];
+    const mines = [{x:130,y:110},{x:130,y:790},{x:1470,y:110},{x:1470,y:790}].map((m,i)=>({...m,id:i,ore:20000,maxOre:20000}));
+    const refineryGifts = [];
+    let thumbnailMode = false;
+    const cash = [1500, 1500];
+    const enemyQueues = {tank: [], harvester: [], antiAir: [], machineGunner: [], rocketSoldier: [], helicopter: [], fighter: []};
+    const groups = new Map();
+    let selectedBuilding = null, attackMode = false, paused = false, elapsed = 0;
+    let uiTimer = 0, accumulator = 0;
+    const buildQueues=[[],[]];
+    const BUILD_TIME={powerPlant:6,barracks:8,refinery:10,factory:12,airTower:14};
+    const POWER={base:0,powerPlant:100,refinery:-40,barracks:-20,factory:-60,airTower:-60};
+    let buildSeq=0;
+    let training=false,trainingTimer=null,trainingDebt=0,trainingLast=0,lastTrainingUI=0;
+    const TRAINING_SPEED=1000, FIXED_STEP=1/60;
+    const learning={matches:0,wins:[0,0],values:{},samples:{}};
+    const roundStats=[{},{}];
+    let trainingSession=null;
+    function showTrainingResults(){
+        const box=document.querySelector('#trainingResults');if(!box||!trainingSession)return;
+        const n=trainingSession.rounds.length,w=[0,0];let draws=0;
+        for(const r of trainingSession.rounds){if(r.winner===null)draws++;else w[r.winner]++;}
+        const rate=v=>n?(v/n*100).toFixed(1)+'%':'—';
+        box.textContent=`本次完成 ${n} 場\n藍方（規則AI）${w[0]} 勝（${rate(w[0])}）\n紅方（深度學習AI）${w[1]} 勝（${rate(w[1])}）\n平手 ${draws} 場\n本次更新 ${Math.max(0,(trainingSession.modelUpdates??neural.updates)-(trainingSession.startUpdates||0))} 次\n未完成對局不計入${trainingSession.saveFailed?'\n模型未能保存，請勿關閉頁面':''}`;box.hidden=false;
+    }
+    try{const data=JSON.parse(localStorage.getItem('rts-counter-training-v1')||'null');if(data&&Number.isFinite(data.matches)&&Array.isArray(data.wins)){learning.matches=data.matches;learning.wins=data.wins;learning.values=data.values||{};learning.samples=data.samples||{};}}catch(_){}
+    let topology = 0, message = '', messageTime = 0;
+    let mouse = { x: 0, y: 0, inside: false };
+
+    let lastUnitClick=null;
+    const selected = new Set();
+    function selectUnitClick(u,now){
+        if(lastUnitClick&&lastUnitClick.id===u.id&&now-lastUnitClick.time<=350){
+            selected.clear();for(const v of units){const c=center(v);if(v.team===TEAM&&v.hp>0&&v.type===u.type&&c.x>=0&&c.x<=W&&c.y>=0&&c.y<=H)selected.add(v.id);}
+            lastUnitClick=null;
+        }else{selected.add(u.id);lastUnitClick={id:u.id,time:now};}
+    }
+    const shots = [];
+
+    const B = {
+        airTower:{name:'航空塔',width:140,height:120,hp:1000},
+        base: { name: "指揮部", width: 120, height: 100, hp: 1000 },
+        factory: { name: "戰車工廠", width: 140, height: 100, hp: 800 },
+        barracks: { name: "兵營", width: 108, height: 90, hp: 600 },
+        powerPlant: {name:'發電廠',width:105,height:90,hp:600},
+        refinery: {name:'精煉廠',width:140,height:110,hp:800}
+    };
+
+    const U = {
+        helicopter:{name:'直昇機',time:10,building:'airTower',make:createHelicopter},
+        fighter:{name:'戰鬥機',time:10,building:'airTower',make:createFighter},
+        tank: { name: "坦克", time: 5, building: "factory", make: createTank },
+        harvester: {name:'採礦車',time:6,building:'factory',make:createHarvester},
+        antiAir: {name:'防空車',time:5,building:'factory',make:createAntiAir},
+        machineGunner: { name: "機槍兵", time: 3, building: "barracks", make: createMG },
+        rocketSoldier: { name: "火箭兵", time: 4, building: "barracks", make: createRocket }
+    };
+
+    const queues = { tank: [], harvester: [], antiAir: [], machineGunner: [], rocketSoldier: [], helicopter: [], fighter: [] };
+    const uis = new Map();
+    let productionSeq = 0;
+
+    const ENEMY = 1;
+    const ai = {thinkTimer:0, attackTimer:0};
+
+    const buildings = [
+        building(0, "base", 80, 360),
+        building(ENEMY, "base", 1400, 360)
+    ];
+    const units = [];
+
+    function building(team, type, x, y) {
+        const d = B[type];
+        return {
+            id: id++, team, type, x, y,
+            width: d.width, height: d.height,
+            name: d.name, hp: d.hp, maxHp: d.hp,
+            angle: 0, cool: 0};
+    }
+
+    function createTank(team, x, y) {
+        return {
+            id: id++, team, type: "tank", category: "vehicle",
+            x, y, width: 40, height: 24, radius: 25, speed: 100,
+            hp: 100, maxHp: 100, attackRange: 200,
+            damage: 20, interval: 0.8, cool: 0,
+            angle: team ? Math.PI : 0,
+            turret: team ? Math.PI : 0,
+            turn: Infinity, tx: x, ty: y};
+    }
+
+    function createMG(team, x, y) {
+        return {
+            id: id++, team, type: "machineGunner", category: "infantry",
+            x, y, width: 22, height: 22, radius: 13, speed: 115,
+            hp: 55, maxHp: 55,attackRange: 180,
+            damage: 12, interval: 0.45, cool: 0,
+            angle: team ? Math.PI : 0, turret: team ? Math.PI : 0,
+            turn: Infinity, tx: x, ty: y};
+    }
+
+    function createRocket(team, x, y) {
+        return {
+            id: id++, team, type: "rocketSoldier", category: "infantry",
+            x, y, width: 22, height: 22, radius: 13, speed: 95,
+            hp: 65, maxHp: 65, attackRange: 200,
+            damage: 25, interval: 1.2, cool: 0, canAir:true, canGround:true,
+            angle: team ? Math.PI : 0, turret: team ? Math.PI : 0,
+            turn: Infinity, tx: x, ty: y};
+    }
+
+    function createHelicopter(team,x,y){
+        return {
+            ...createTank(team,x,y),type:'helicopter',category:'air',layer:'air',
+            width:68,height:44,radius:35,speed:155,hp:125,maxHp:125,
+            damage:24,interval:.7,attackRange:200,canAir:false,canGround:true};
+    }
+    function createFighter(team,x,y){
+        return {
+            ...createHelicopter(team,x,y),type:'fighter',
+            width:72,height:48,radius:36,speed:230,hp:110,maxHp:110,
+            damage:15,interval:.5,attackRange:220,canAir:true};
+    }
+    function createHarvester(team,x,y) {
+        return {...createTank(team,x,y),type:'harvester',width:46,height:30,radius:28,speed:85,
+            hp:220,maxHp:220,damage:0,attackRange:0,cargo:0,capacity:300,harvesting:true,mineId:null,miningState:'seek',mineTimer:0};
+    }
+    function createAntiAir(team,x,y) {
+        return {...createTank(team,x,y),type:'antiAir',speed:120,hp:90,maxHp:90,
+            damage:9,interval:.25,attackRange:200,canAir:true,canGround:true};
+    }
+    function hasTech(type,team=TEAM) {
+        return (TECH[type]||[]).every(t=>buildings.some(b=>b.team===team&&b.type===t&&b.hp>0));
+    }
+    function canTarget(a,b) {
+        return a.damage>0 && (b.layer==='air'||b.category==='air' ? !!a.canAir : a.canGround!==false);
+    }
+    function center(o) {
+        return { x: o.x + o.width / 2, y: o.y + o.height / 2 };
+    }
+
+    function q(type, team = TEAM) { 
+        return (team === TEAM ? queues : enemyQueues)[type]; 
+    }
+
+    function producer(type, pid, team = TEAM) {
+        return buildings.find(b => b.team === team && b.type === U[type].building && b.hp > 0 && (!pid || b.id === pid)) || null;
+    }
+
+    function pos(e) {
+        const r = canvas.getBoundingClientRect();
+        return {
+            x: (e.clientX - r.left) * W / r.width,
+            y: (e.clientY - r.top) * H / r.height
+        };
+    }
+
+    function hitRect(x, y, r, b) {
+        const nx = Math.max(b.x, Math.min(x, b.x + b.width));
+        const ny = Math.max(b.y, Math.min(y, b.y + b.height));
+        return Math.hypot(x - nx, y - ny) < r;
+    }
+
+    function canBuild(type, x, y, team = TEAM) {
+        const d = B[type];
+        if (!d || !hasTech(type,team)) return false;
+        // 生產建築兩邊最多一座（含被摧毀後可重建）
+        if ((type === "factory" || type === "barracks" || type === "airTower") && buildings.some(b => b.team === team && b.type === type && b.hp > 0)) return false;
+        if (x < 0 || y < 0 || x + d.width > W || y + d.height > H) return false;
+        const cx = x + d.width / 2, cy = y + d.height / 2;
+        if (!buildings.some(b => b.team === team && b.hp > 0 && Math.hypot(cx-center(b).x, cy-center(b).y) <= BUILD_RADIUS)) return false;
+
+        for(const mine of mines) if (hitRect(mine.x,mine.y,65,{x,y,width:d.width,height:d.height})) return false;
+        for (const b of buildings) {
+            if (
+                x < b.x + b.width && x + d.width > b.x &&
+                y < b.y + b.height && y + d.height > b.y
+            ) return false;
+        }
+
+        for (const u of units) {
+            const c = center(u);
+            if (u.layer!=='air' && hitRect(c.x, c.y, u.radius + 2, {
+                x, y, width: d.width, height: d.height
+            })) return false;
+        }
+        return true;
+    }
+
+    function canStand(u, x, y, ignore = u.id) {
+        const c = { x: x + u.width / 2, y: y + u.height / 2 };
+
+        if (
+            c.x - u.radius < 0 || c.y - u.radius < 0 ||
+            c.x + u.radius > W || c.y + u.radius > H
+        ) return false;
+
+        for (const b of buildings) {
+            if (b.hp>0 && u.layer!=='air' && hitRect(c.x, c.y, u.radius + 2, b)) return false;
+        }
+
+        for (const v of spatialNear(c.x,c.y,u.radius+55)) {
+            if (
+                v.id !== ignore && v.hp > 0 && (v.layer==='air')===(u.layer==='air') &&
+                Math.hypot(c.x - center(v).x, c.y - center(v).y) <
+                    u.radius + v.radius + 2
+            ) return false;
+        }
+        return true;
+    }
+
+    function enqueue(type, team = TEAM) {
+        const p = producer(type, null, team);
+        if (!p || cash[team] < COST[type] || q(type, team).length >= 20) return false;
+        cash[team] -= COST[type];
+        q(type, team).push({type, elapsed: 0, duration: U[type].time * 2, producer: p.id, unit: null, seq: productionSeq++});
+        updateUI();
+        return true;
+    }
+    function cancel(type) {
+        const job = q(type).pop();
+        if (job) cash[TEAM] += COST[type];
+        updateUI();
+    }
+
+    function exitSpot(b, u) {
+        const c = center(b);
+        const g = u.radius + 8;
+        const spots = [
+            { x: c.x, y: b.y + b.height + g, a: Math.PI / 2 },
+            { x: b.x + b.width + g, y: c.y, a: 0 },
+            { x: c.x, y: b.y - g, a: -Math.PI / 2 },
+            { x: b.x - g, y: c.y, a: Math.PI }
+        ];
+
+        for (let ring = 0; ring < 4; ring++) {
+            const rx = b.width / 2 + g + ring * 26, ry = b.height / 2 + g + ring * 26;
+            for (let i = 0; i < 16; i++) {
+                const a = i * Math.PI / 8;
+                spots.push({x: c.x + Math.cos(a)*rx, y: c.y + Math.sin(a)*ry, a});
+            }
+        }
+        for (const s of spots) {
+            const x = s.x - u.width / 2;
+            const y = s.y - u.height / 2;
+            if (canStand(u, x, y)) return { x, y, a: s.a };
+        }
+        return null;
+    }
+
+    function updateProduction(dt, team = TEAM) {
+        const activeJobs = new Map();
+        for(const type of Object.keys(U)) {
+            const job=q(type,team)[0]; if(!job)continue;
+            const old=activeJobs.get(job.producer);
+            if(!old||job.seq<old.seq)activeJobs.set(job.producer,job);
+        }
+
+        for (const type of Object.keys(U)) {
+            const queue = q(type, team);
+            if (!queue.length) continue;
+
+            const job = queue[0];
+            if(activeJobs.get(job.producer)!==job)continue;
+
+            const p = producer(type, job.producer, team);
+            if (!p) {
+                cash[team] += COST[type];
+                queue.shift();
+                continue;
+            }
+
+            job.elapsed = Math.min(job.duration, job.elapsed + dt * productionRate(team));
+            if (job.elapsed < job.duration) continue;
+
+            if (!job.unit) {
+                const c = center(p);
+                job.unit = U[type].make(team, c.x, c.y);
+            }
+
+            const spot = exitSpot(p, job.unit);
+            if (spot) {
+                Object.assign(job.unit, {
+                    x: spot.x, y: spot.y,
+                    tx: spot.x, ty: spot.y,
+                    angle: spot.a, turret: spot.a
+                });
+                units.push(job.unit); spatialMove(job.unit);
+                if(job.unit.type==='harvester') startHarvest(job.unit);
+                else issueMove(job.unit, p.rally || {x: spot.x + (team ? -100 : 100), y: spot.y + 60}, false);
+                queue.shift();
+            }
+        }
+    }
+
+    // 敵軍自動建造：優先在總部附近找不重疊的位置。
+    function aiFindBuildSpot(type, team = ENEMY) {
+        const d = B[type];
+        const home = buildings.find(b => b.team === team && b.type === "base");
+        const origin = home ? center(home) : { x: 1400, y: 410 };
+        const offsets = [];
+        for (let ring = 1; ring <= 6; ring++) {
+            offsets.push(
+                { x: -ring * 125, y: ring % 2 ? 115 : -115 },
+                { x: -ring * 125, y: ring % 2 ? -115 : 115 },
+                { x: -ring * 65, y: ring * 105 },
+                { x: -ring * 65, y: -ring * 105 },
+                { x: -ring * 145, y: 0 }
+            );
+        }
+        for (const o of offsets) {
+            const x = Math.max(0, Math.min(W - d.width, origin.x + o.x * (team === ENEMY ? 1 : -1) - d.width / 2));
+            const y = Math.max(0, Math.min(H - d.height, origin.y + o.y - d.height / 2));
+            if (canBuild(type, x, y, team)) return { x, y };
+        }
+        // 備用格點搜尋，避免建築卡在無法放置狀態。
+        for (let y = 30; y < H - d.height; y += 35) {
+            for (let x = 20; x < W - d.width; x += 40) {
+                if (canBuild(type, x, y, team)) return { x, y };
+            }
+        }
+        return null;
+    }
+
+    function powerState(team=TEAM){
+        let supply=0,used=0;
+        for(const b of buildings)if(b.team===team&&b.hp>0){const p=POWER[b.type]||0;if(p>0)supply+=p;else used-=p;}
+        return {supply,used,low:supply<used};
+    }
+    function productionRate(team){return powerState(team).low?.5:1;}
+    function enqueueBuilding(type,team=TEAM){
+        if(!BUILD_TYPES.includes(type)||!hasTech(type,team)||cash[team]<COST[type]||buildQueues[team].length>=8)return false;
+        if(['factory','barracks'].includes(type)&&(buildings.some(b=>b.team===team&&b.type===type&&b.hp>0)||buildQueues[team].some(j=>j.type===type)))return false;
+        cash[team]-=COST[type];
+        buildQueues[team].push({id:++buildSeq,type,elapsed:0,duration:BUILD_TIME[type],ready:false});
+        updateUI();return true;
+    }
+    function cancelBuilding(jobId,team=TEAM){
+        const idx=buildQueues[team].findIndex(j=>j.id===jobId);if(idx<0)return false;
+        const [job]=buildQueues[team].splice(idx,1);cash[team]+=COST[job.type];
+        if(team===TEAM&&placing===job.type&&!buildQueues[team].some(j=>j.type===job.type&&j.ready))placing=null;
+        updateUI();return true;
+    }
+    function updateBuildingProduction(dt){
+        for(let team=0;team<2;team++){
+            const job=buildQueues[team].find(j=>!j.ready&&hasTech(j.type,team));
+            if(job&&hasTech(job.type,team)){
+                job.elapsed=Math.min(job.duration,job.elapsed+dt*productionRate(team));
+                job.ready=job.elapsed>=job.duration;
+            }
+            if(team===ENEMY||training)for(const ready of [...buildQueues[team]].filter(j=>j.ready)){
+                const spot=aiFindBuildSpot(ready.type,team);if(spot)construct(ready.type,spot.x,spot.y,team);
+            }
+        }
+    }
+    function construct(type,x,y,team=TEAM){
+        const job=buildQueues[team].find(j=>j.type===type&&j.ready);
+        if(!job||!canBuild(type,x,y,team))return false;
+        const built=building(team,type,x,y);buildings.push(built);
+        if(type==='refinery')refineryGifts.push({buildingId:built.id,unit:createHarvester(team,0,0)});
+        buildQueues[team].splice(buildQueues[team].indexOf(job),1);topology++;return true;
+    }
+    function aiBuild(type,team=ENEMY){
+        if(buildQueues[team].some(j=>j.type===type))return false;
+        if(type!=='powerPlant'&&buildings.some(b=>b.team===team&&b.type===type&&b.hp>0))return false;
+        return enqueueBuilding(type,team);
+    }
+
+    function armyStrength(army,foes){
+        return army.reduce((sum,u)=>{const viable=foes.filter(v=>canTarget(u,v));
+            const efficacy=viable.length?viable.reduce((n,v)=>n+damageMultiplier(u,v),0)/foes.length:0;
+            return sum+Math.sqrt(u.hp*u.damage/Math.max(.1,u.interval))*efficacy;},0);
+    }
+    const assault=[false,false];
+    function aiAttack(team=ENEMY){
+        const own=units.filter(u=>u.team===team&&u.hp>0&&u.damage>0),opponents=units.filter(u=>u.team!==team&&u.hp>0&&u.damage>0);
+        const ours=armyStrength(own,opponents),theirs=armyStrength(opponents,own);
+        assault[team]=opponents.length===0||ours>theirs*(assault[team]?.85:1.2);
+        const home=buildings.find(b=>b.team===team&&b.type==='base');
+        const invaded=home&&opponents.some(u=>Math.hypot(center(u).x-center(home).x,center(u).y-center(home).y)<300);
+        if(!assault[team]&&!invaded&&home){
+            const rally={x:center(home).x+(team===0?180:-180),y:center(home).y};
+            if(own.some(u=>u.orderTargetId||Math.hypot(center(u).x-rally.x,center(u).y-rally.y)>240))issueFormation(own,rally);
+            return;
+        }
+
+        const foes=units.filter(u=>u.team!==team&&u.hp>0),army=foes.filter(u=>u.damage>0);
+        const structures=buildings.filter(b=>b.team!==team&&b.hp>0);
+        for(const u of units.filter(u=>u.team===team&&u.hp>0&&u.damage>0)){
+            const soldiers=army.filter(v=>canTarget(u,v));
+            const candidates=soldiers.length?soldiers:foes.filter(v=>canTarget(u,v));
+            const targets=candidates.length?candidates:structures;
+            let target=null,best=Infinity,c=center(u);
+            for(const v of targets){
+                if(!canTarget(u,v))continue;
+                const p=center(v),distance=Math.hypot(c.x-p.x,c.y-p.y);
+                const score=distance/(.7+Math.min(1.5,damageMultiplier(u,v))*.3);
+                if(score<best){best=score;target=v;}
+            }
+            if(target&&u.orderTargetId!==target.id){clearOrder(u);u.orderTargetId=target.id;u.tx=u.x;u.ty=u.y;}
+        }
+    }
+    function recordDamage(attacker,target,amount){
+        const actual=Math.min(target.hp,amount);target.hp-=actual;
+        neuralReward+=(attacker.team===ENEMY?1:-1)*actual/target.maxHp*(COST[target.type]||1000)/2000;
+        if(training&&attacker.type in U){
+            const key=attacker.type+'>'+target.type;
+            const st=roundStats[attacker.team][key]||(roundStats[attacker.team][key]={damage:0,kills:0,shots:0});
+            st.damage+=actual/target.maxHp;st.kills+=target.hp<=0?1:0;st.shots++;
+        }
+    }
+    // Two hidden layers. Online, on-policy actor-critic; no rule labels or counter scores enter training.
+    const NN_TEAM=ENEMY;
+    const NN_TYPES=['machineGunner','rocketSoldier','tank','harvester','antiAir','helicopter','fighter'];
+    const NN_ACTIONS=['machineGunner','rocketSoldier','tank','antiAir','helicopter','fighter',null];
+    const NN_SIZE=[61,48,36,8], NN_KEY='rts-neural-actor-critic-v1';
+    function makeNetwork(random=Math.random){
+        return {version:1,sizes:NN_SIZE.slice(),updates:0,episodes:0,
+            weights:NN_SIZE.slice(1).map((n,l)=>Array.from({length:n},()=>Array.from({length:NN_SIZE[l]},()=>(random()*2-1)*Math.sqrt(6/(NN_SIZE[l]+n))))),
+            biases:NN_SIZE.slice(1).map(n=>Array(n).fill(0))};
+    }
+    function validNetwork(m){
+        return m&&m.version===1&&JSON.stringify(m.sizes)===JSON.stringify(NN_SIZE)&&Number.isInteger(m.updates)&&m.updates>=0
+        &&Number.isInteger(m.episodes)&&m.episodes>=0&&Array.isArray(m.weights)&&m.weights.length===3&&Array.isArray(m.biases)
+        &&m.biases.length===3&&m.weights.every((w,l)=>Array.isArray(w)&&w.length===NN_SIZE[l+1]&&w.every(row=>Array.isArray(row)
+        &&row.length===NN_SIZE[l]&&row.every(Number.isFinite)))&&m.biases.every((b,l)=>Array.isArray(b)&&b.length===NN_SIZE[l+1]&&b.every(Number.isFinite));
+    }
+    let neural=makeNetwork(),neuralPending=null,neuralReward=0,neuralSaveFailed=false;
+    try{const m=JSON.parse(localStorage.getItem(NN_KEY)||'null');if(validNetwork(m))neural=m;}catch(_){}
+    function saveNeural(){try{localStorage.setItem(NN_KEY,JSON.stringify(neural));neuralSaveFailed=false;}catch(_){neuralSaveFailed=true;}}
+    function neuralForward(x,mask,model=neural){
+        const activations=[x];
+        for(let l=0;l<3;l++){const prev=activations[l];activations.push(model.weights[l].map((row,j)=>{let v=model.biases[l][j];for(let i=0;i<prev.length;i++)v+=row[i]*prev[i];return l<2?Math.tanh(v):v;}));}
+        const out=activations[3],max=Math.max(...out.slice(0,7).filter((_,i)=>mask[i]));
+        const p=out.slice(0,7).map((v,i)=>mask[i]?Math.exp(v-max):0),sum=p.reduce((a,b)=>a+b,0);
+        return {activations,p:p.map(v=>v/sum),value:out[7]};
+    }
+    function neuralObservation(){
+        const x=[],cap=(v,n)=>Math.max(0,Math.min(2,v/n));
+        for(const team of [NN_TEAM,1-NN_TEAM]){
+            for(const type of NN_TYPES){const group=units.filter(u=>u.team===team&&u.type===type&&u.hp>0);x.push(cap(group.length,20),cap(group.reduce((n,u)=>n+u.hp/u.maxHp,0),20),cap(q(type,team).length,5));}
+            for(const type of ['base','powerPlant','refinery','barracks','factory','airTower'])x.push(cap(buildings.filter(b=>b.team===team&&b.type===type&&b.hp>0).reduce((n,b)=>n+b.hp/b.maxHp,0),3));
+            const power=powerState(team);x.push(cap(cash[team],5000),cap(power.supply,500),cap(power.used,500));
+        }
+        x.push(Math.min(1,elapsed/300));return x;
+    }
+    function neuralMask(){const full=units.filter(u=>u.team===NN_TEAM&&u.hp>0).length>=60;
+        return NN_ACTIONS.map(type=>type===null||(!full&&!!producer(type,null,NN_TEAM)&&cash[NN_TEAM]>=COST[type]&&q(type,NN_TEAM).length<2));}
+    function neuralGradient(cache,action,advantage){
+        const entropy=-cache.p.reduce((n,p)=>n+(p?p*Math.log(p):0),0);
+        // Gradient ascent on log pi(a)*adv + .01*entropy - .25*(target-value)^2.
+        let delta=cache.p.map((p,i)=>advantage*((i===action?1:0)-p)-.01*(p?p*(Math.log(p)+entropy):0));delta.push(.5*advantage);
+        const dw=Array(3),db=Array(3);
+        for(let l=2;l>=0;l--){db[l]=delta.slice();dw[l]=delta.map(d=>cache.activations[l].map(v=>d*v));
+            if(l){const next=Array(NN_SIZE[l]).fill(0);for(let i=0;i<next.length;i++){for(let j=0;j<delta.length;j++)next[i]+=neural.weights[l][j][i]*delta[j];next[i]*=1-cache.activations[l][i]**2;}delta=next;}}
+        return {dw,db};
+    }
+    function applyNeuralGradient(g){
+        let norm=0;for(let l=0;l<3;l++){for(const row of g.dw[l])for(const v of row)norm+=v*v;for(const v of g.db[l])norm+=v*v;}
+        const rate=.001*Math.min(1,5/Math.max(1e-12,Math.sqrt(norm)));
+        for(let l=0;l<3;l++)for(let j=0;j<g.db[l].length;j++){neural.biases[l][j]+=rate*g.db[l][j];for(let i=0;i<g.dw[l][j].length;i++)neural.weights[l][j][i]+=rate*g.dw[l][j][i];}
+        neural.updates++;
+    }
+    function settleNeural(done=false,terminalReward=0){
+        if(!neuralPending)return;
+        const next=done?0:neuralForward(neuralObservation(),neuralMask()).value;
+        const old=neuralForward(neuralPending.x,neuralPending.mask);
+        const reward=neuralReward-neuralPending.reward+terminalReward;
+        const advantage=Math.max(-3,Math.min(3,reward+Math.pow(.995,Math.max(1,elapsed-neuralPending.time))*next-old.value));
+        applyNeuralGradient(neuralGradient(old,neuralPending.action,advantage));neuralPending=null;
+        if(!training&&neural.updates%10===0)saveNeural();
+    }
+    function chooseNeural(){
+        settleNeural();const x=neuralObservation(),mask=neuralMask(),cache=neuralForward(x,mask);
+
+        let r=Math.random(),action=6;for(let i=0;i<7;i++){r-=cache.p[i];if(r<=0&&mask[i]){action=i;break;}}
+        neuralPending={x,mask,action,reward:neuralReward,time:elapsed};return NN_ACTIONS[action];
+    }
+
+    function chooseCounter(team){
+        const threats=units.filter(u=>u.team!==team&&u.hp>0&&u.damage>0);
+        const options=Object.keys(U).filter(t=>t!=='harvester'&&producer(t,null,team)&&cash[team]>=COST[t]);
+        if(!options.length)return null;
+        const score=type=>{
+            const saved=id,u=U[type].make(team,0,0);id=saved;
+            if(!threats.length)return type==='tank'?2:1;
+            let value=0;
+            for(const foe of threats){
+                if(!canTarget(u,foe))continue;
+                const key=type+'>'+foe.type,learned=0;
+                value+=(u.damage/u.interval)*damageMultiplier(u,foe)/COST[type]*(foe.hp/foe.maxHp)*(1+Math.max(-.2,Math.min(.4,learned)));
+            }
+            return value;
+        };
+        options.sort((a,b)=>score(b)-score(a));
+        // Fixed deterministic counter policy; the blue opponent never learns.
+        return options[0];
+    }
+    function botBuildAndProduce(team){
+        if(powerState(team).low){aiBuild('powerPlant',team);return;}
+        if(!buildings.some(b=>b.team===team&&b.type==='powerPlant')){aiBuild('powerPlant',team);return;}
+        if(!buildings.some(b=>b.team===team&&b.type==='refinery')){aiBuild('refinery',team);return;}
+        if(!buildings.some(b=>b.team===team&&b.type==='factory')){aiBuild('factory',team);return;}
+        const miners=units.filter(u=>u.team===team&&u.type==='harvester'&&u.hp>0).length+q('harvester',team).length;
+        if(miners<2){if(!q('harvester',team).length)enqueue('harvester',team);return;}
+        if(!buildings.some(b=>b.team===team&&b.type==='barracks')){aiBuild('barracks',team);return;}
+        if(!buildings.some(b=>b.team===team&&b.type==='airTower')&&cash[team]>=COST.airTower+250)aiBuild('airTower',team);
+        const type=team===ENEMY?chooseNeural():chooseCounter(team);
+        if(type&&q(type,team).length<2&&units.filter(u=>u.team===team&&u.hp>0).length<60)enqueue(type,team);
+    }
+    function updateEnemyAI(dt){
+        ai.thinkTimer+=dt;ai.attackTimer+=dt;
+        if(ai.thinkTimer>=1){ai.thinkTimer-=1;botBuildAndProduce(ENEMY);if(training)botBuildAndProduce(TEAM);}
+        if(ai.attackTimer>=1){ai.attackTimer-=1;aiAttack(ENEMY);if(training)aiAttack(TEAM);}
+    }
+    function finishTrainingRound(winner){
+        if(trainingSession){trainingSession.rounds.push({winner,seconds:elapsed,neuralUpdates:neural.updates,stats:JSON.parse(JSON.stringify(roundStats))});try{localStorage.setItem('rts-training-results-v1',JSON.stringify(trainingSession));}catch(_){}}
+        learning.matches++;if(winner!==null)learning.wins[winner]++;
+        settleNeural(true,winner===ENEMY?1:winner===TEAM?-1:0);neural.episodes++;saveNeural();
+        resetMatch();
+    }
+    function trainingPump(){
+        if(!training)return;
+        if(paused){trainingLast=performance.now();trainingDebt=0;trainingTimer=setTimeout(trainingPump,16);return;}
+        const now=performance.now();trainingDebt+=(now-trainingLast)/1000*TRAINING_SPEED;trainingLast=now;
+        const deadline=performance.now()+10;
+        while(trainingDebt>=FIXED_STEP&&performance.now()<deadline){
+            update(FIXED_STEP);trainingDebt-=FIXED_STEP;
+        }
+        trainingTimer=setTimeout(trainingPump,0);
+    }
+    function toggleTraining(){
+        training=!training;clearTimeout(trainingTimer);trainingTimer=null;
+        if(training){trainingSession={mode:'red-neural-vs-blue-rules',startedAt:new Date().toISOString(),startUpdates:neural.updates,rounds:[]};document.querySelector('#trainingResults').hidden=true;}
+        else if(trainingSession){settleNeural(false);saveNeural();trainingSession.modelUpdates=neural.updates;trainingSession.saveFailed=neuralSaveFailed;trainingSession.stoppedAt=new Date().toISOString();trainingSession.unfinishedSeconds=elapsed;showTrainingResults();try{localStorage.setItem('rts-training-results-v1',JSON.stringify(trainingSession));}catch(_){}}
+        resetMatch();
+        trainingDebt=0;trainingLast=performance.now();
+        document.querySelector('#trainAI').textContent=training?'停止訓練':'訓練深度學習AI ×1000';
+        if(training)trainingPump();
+    }
+
+    function updateUI() {
+        if(training&&performance.now()-lastTrainingUI<100)return;lastTrainingUI=performance.now();
+        const money=document.querySelector('#funds');if(money)money.textContent='$'+Math.floor(cash[TEAM]).toLocaleString();
+        const pwr=powerState();const power=document.querySelector('#power');
+        if(power){power.textContent=`${pwr.used}/${pwr.supply}`;power.parentElement.classList.toggle('low-power',pwr.low);}
+        for(const type of BUILD_TYPES){
+            const button=document.querySelector(`#build${type[0].toUpperCase()}${type.slice(1)}`);if(!button)continue;
+            const jobs=buildQueues[TEAM].filter(j=>j.type===type),ready=jobs.find(j=>j.ready),job=jobs.find(j=>!j.ready);
+            const exists=['factory','barracks'].includes(type)&&buildings.some(b=>b.team===TEAM&&b.type===type&&b.hp>0);
+            const missing=(TECH[type]||[]).filter(t=>!buildings.some(b=>b.team===TEAM&&b.type===t&&b.hp>0));
+            const reason=missing.length?'需要'+missing.map(t=>B[t].name).join('、'):exists?'已建造':!ready&&!job&&cash[0]<COST[type]?'資金不足':'';
+            button.disabled=training||!!reason||(!ready&&!!job&&['factory','barracks'].includes(type));
+            const span=button.querySelector('span');
+            const active=buildQueues[TEAM].find(j=>!j.ready&&hasTech(j.type,TEAM));
+            const status=ready?'就緒':job?(job===active?'':'等待生產'):reason||'';
+            const powerText=POWER[type]>0?'供電 +'+POWER[type]:'耗電 '+Math.abs(POWER[type]||0);
+            if(span)span.textContent=B[type].name+' $'+COST[type]+'\n'+powerText+'\n'+status;
+            button.classList.toggle('ready-building',!!ready);button.style.setProperty('--progress-angle',`${ready?360:job?Math.min(1,job.elapsed/job.duration)*360:0}deg`);button.classList.toggle('is-producing',!!ready||!!job&&job.elapsed>0);
+            button.title=ready?'左鍵放置，右鍵取消並退款':'左鍵加入佇列，右鍵取消並退款';
+
+            // ======= 新增：控制建築佇列數字的顯示 =======
+            const bBadge = button.querySelector('.queue-count');
+            if (bBadge) {
+                bBadge.hidden = !jobs.length;   // 如果佇列沒東西就隱藏數字
+                bBadge.textContent = jobs.length; // 填入當前佇列長度（含準備放置的）
+            }
+        }
+        for(const [type,ui] of uis){
+            const queue=q(type),job=queue[0],progress=job?Math.min(1,job.elapsed/job.duration):0;
+            const p=producer(type),reason=!p?'需要'+B[U[type].building].name:cash[0]<COST[type]?'資金不足':queue.length>=20?'佇列已滿':'';
+            // Use aria-disabled so right-click cancellation still works when cash is exhausted.
+            ui.button.setAttribute('aria-disabled',String(training||!!reason));
+            ui.button.classList.toggle('unavailable',training||!!reason);
+            ui.button.style.setProperty('--progress-angle',`${progress*360}deg`);
+            ui.button.classList.toggle('is-producing',!!job&&job.elapsed>0);
+            ui.label.textContent=U[type].name+' $'+COST[type]+(job&&progress>=1?'\n等待出口':reason?'\n'+reason:'');
+            ui.badge.hidden=!queue.length;ui.badge.textContent=queue.length;
+            ui.button.title=type==='antiAir'?'對空／對地，擅長對空與步兵，對載具較弱':type==='harvester'?'自動採礦並返回精煉廠，右鍵礦區指定採集':'左鍵生產，右鍵取消並退款';
+        }
+    }
+
+    function preview(type,buildingPreview){
+        const p=document.createElement('canvas');p.width=160;p.height=90;
+        const previous=ctx;ctx=p.getContext('2d');thumbnailMode=true;
+        const savedId=id;
+        try{
+            ctx.fillStyle='#294936';ctx.fillRect(0,0,160,90);
+            const obj=buildingPreview?building(TEAM,type,0,0):U[type].make(TEAM,0,0);
+            obj.angle=0;obj.turret=0;
+            const scale=buildingPreview?Math.min(130/obj.width,70/obj.height):1.8;
+            ctx.save();ctx.translate((160-obj.width*scale)/2,(90-obj.height*scale)/2);ctx.scale(scale,scale);
+            if(buildingPreview)drawBuilding(obj);else drawUnit(obj);
+            ctx.restore();
+        }finally{ctx=previous;thumbnailMode=false;id=savedId;}
+        return p;
+    }
+
+    function setupBuildingButtons(){
+        for(const type of BUILD_TYPES){
+            const b=document.querySelector(`#build${type[0].toUpperCase()}${type.slice(1)}`);
+            if(!b) continue;
+
+            const badge = document.createElement('span');
+            badge.className = "queue-count"; 
+            badge.hidden = true;
+
+            b.replaceChildren(preview(type,true), Object.assign(document.createElement('span'),{textContent:B[type].name}), badge);
+            b.addEventListener('click',()=>{
+                if(training)return;
+                if(buildQueues[TEAM].some(j=>j.type===type&&j.ready)){placing=type;attackMode=false;}
+                else enqueueBuilding(type);
+            });
+            b.addEventListener('contextmenu',e=>{e.preventDefault();if(training)return;const job=buildQueues[TEAM].filter(j=>j.type===type).at(-1);if(job)cancelBuilding(job.id);});
+        }
+    }
+
+    function setupUnitButtons() {
+        const box = document.querySelector("#unitButtons");
+
+        for (const type of ['machineGunner','rocketSoldier','tank','harvester','antiAir','helicopter','fighter']) {
+            const info=U[type];
+            const b = document.createElement("button");
+            b.className = "building-button unit-production-button";
+
+            const im = preview(type, false);
+            const label = document.createElement("span");
+            const badge = document.createElement("span");
+
+            label.className = "unit-button-label";
+            label.textContent = info.name;
+            badge.className = "queue-count";
+            badge.hidden = true;
+
+            b.append(im, label, badge);
+            box.append(b);
+            uis.set(type, { button: b, label, badge });
+
+            b.onclick = () => {if(!training)enqueue(type);};
+            b.oncontextmenu = e => {
+                e.preventDefault();
+                if(!training)cancel(type);
+            };
+        }
+    }
+
+    function drawBuildings(){for(const b of buildings)drawBuilding(b);}
+    function drawBuilding(b){
+            ctx.save();
+            ctx.translate(b.x, b.y);
+            ctx.scale(b.width / 120, b.height / 88);
+
+            const team = b.team === TEAM ? "#59a9ff" : "#ed726b";
+            ctx.fillStyle = "#26343b";
+            ctx.fillRect(0, 0, 120, 88);
+            ctx.fillStyle = "#657b85";
+            ctx.fillRect(8, 8, 104, 72);
+            ctx.fillStyle = team;
+            ctx.fillRect(8, 8, 104, 5);
+
+            if(b.type==='airTower'){
+                ctx.fillStyle='#354850';ctx.fillRect(12,22,72,56);ctx.strokeStyle='#c9d7dc';ctx.lineWidth=3;ctx.beginPath();ctx.arc(48,50,22,0,Math.PI*2);ctx.stroke();ctx.fillStyle='#d4e3e8';ctx.font='26px sans-serif';ctx.fillText('H',38,59);
+                ctx.fillStyle='#223b4c';ctx.fillRect(89,22,20,55);ctx.fillStyle=team;ctx.fillRect(85,15,28,19);
+            } else if (b.type === "base") {
+                ctx.fillStyle = "#273f50";
+                ctx.fillRect(25, 33, 40, 28);
+                ctx.fillStyle = "#fff";
+                ctx.font = "bold 16px sans-serif";
+                ctx.fillText("HQ", 32, 51);
+                ctx.fillStyle = "#d0dce1";
+                ctx.beginPath();
+                ctx.arc(95, 34, 11, 0, 7);
+                ctx.fill();
+            } else if (b.type === "factory") {
+                ctx.fillStyle='#8b989b';ctx.fillRect(8,22,76,52);
+                ctx.fillStyle='#344951';ctx.fillRect(20,43,52,31);
+                ctx.fillStyle=team;ctx.fillRect(20,39,52,4);
+                // Compensate for building scaling so the chimney tops stay round.
+                for(const y of [34,64]){
+                    ctx.save();ctx.translate(100,y);ctx.scale(1,(b.width/120)/(b.height/88));
+                    ctx.fillStyle='#283238';ctx.beginPath();ctx.arc(0,0,11,0,Math.PI*2);ctx.fill();
+                    ctx.fillStyle='#101619';ctx.beginPath();ctx.arc(0,0,8,0,Math.PI*2);ctx.fill();ctx.restore();
+                }
+            } else if(b.type==='powerPlant') {
+                ctx.fillStyle='#455b67';ctx.fillRect(18,22,84,48);
+                ctx.fillStyle='#a9bac2';ctx.fillRect(24,27,72,38);
+                ctx.fillStyle='#344b57';ctx.fillRect(77,32,13,28);
+                ctx.fillStyle='#e7cf73';ctx.beginPath();ctx.moveTo(64,29);ctx.lineTo(42,49);ctx.lineTo(54,49);ctx.lineTo(48,63);ctx.lineTo(70,43);ctx.lineTo(58,43);ctx.closePath();ctx.fill();
+                ctx.fillStyle=team;ctx.fillRect(24,65,72,5);
+            } else if(b.type==='refinery') {
+                ctx.fillStyle='#a4b8c0';ctx.fillRect(20,23,80,48);
+                ctx.fillStyle='#dcb351';ctx.fillRect(28,31,27,24);
+                ctx.fillStyle='#344951';ctx.fillRect(65,31,27,40);
+            } else if (b.type === "barracks") {
+                ctx.fillStyle = "#81949c";
+                ctx.fillRect(16, 18, 88, 62);
+                ctx.strokeStyle = "#526872";
+                ctx.beginPath();
+                ctx.moveTo(60, 18);
+                ctx.lineTo(60, 80);
+                ctx.moveTo(16, 48);
+                ctx.lineTo(104, 48);
+                ctx.stroke();
+                ctx.fillStyle = "#26343b";
+                ctx.fillRect(43, 55, 34, 28);
+                ctx.fillStyle = team;
+                ctx.fillRect(43, 55, 34, 4);
+                ctx.fillStyle='#d3dce0';ctx.fillRect(58,22,3,29);
+                ctx.fillStyle=team;ctx.beginPath();ctx.moveTo(61,22);ctx.lineTo(83,30);ctx.lineTo(61,38);ctx.closePath();ctx.fill();
+            }
+
+            ctx.restore();
+
+    }
+    function drawBuildingHealth(b) {
+        const ratio = Math.max(0, b.hp / b.maxHp);
+        ctx.fillStyle = '#151d20'; ctx.fillRect(b.x, b.y-12, b.width, 6);
+        ctx.fillStyle = ratio > .35 ? '#7ee787' : '#ff6b6b'; ctx.fillRect(b.x,b.y-12,b.width*ratio,6);
+        if (selectedBuilding === b.id) {
+            ctx.strokeStyle = '#baff75'; ctx.strokeRect(b.x-4,b.y-4,b.width+8,b.height+8);
+            if (b.rally) { ctx.beginPath(); ctx.moveTo(center(b).x,center(b).y); ctx.lineTo(b.rally.x,b.rally.y); ctx.stroke(); ctx.fillText('⚑',b.rally.x,b.rally.y); }
+        }
+    }
+
+
+    function health(u, c, w) {
+        ctx.fillStyle = "#151d20";
+        ctx.fillRect(c.x - w / 2, c.y - u.radius - 8, w, 4);
+        ctx.fillStyle = u.hp / u.maxHp > 0.35 ? "#7ee787" : "#ff6b6b";
+        ctx.fillRect(
+            c.x - w / 2,
+            c.y - u.radius - 8,
+            w * Math.max(0, u.hp / u.maxHp),
+            4
+        );
+    }
+
+    function drawUnit(u) {
+        const c = center(u);
+        const team = u.team === TEAM ? "#59a9ff" : "#ed726b";
+
+        ctx.save();
+        ctx.translate(c.x, c.y);
+
+        if (!thumbnailMode && selected.has(u.id)) {
+            ctx.strokeStyle = "#baff75";
+            ctx.strokeRect(-u.width/2-5,-u.height/2-5,u.width+10,u.height+10);
+        }
+
+        if(u.layer==='air') {
+            ctx.rotate(u.angle);
+            const shape=(color,points)=>{ctx.fillStyle=color;ctx.beginPath();points.forEach(([x,y],i)=>i?ctx.lineTo(x,y):ctx.moveTo(x,y));ctx.closePath();ctx.fill();};
+            if(u.type==='fighter'){
+                // Simplified F/A-18: long strakes, swept wings, twin tails and stores.
+                for(const side of [-1,1]){
+                    shape('#92a9b6',[[19,side*2.1],[7,side*5.6],[-3,side*18],[-9,side*18],[-6,side*3.5]]);
+                    shape('#92a9b6',[[-17,side*2.8],[-21,side*10.5],[-26,side*10.5],[-24,side*2.1]]);
+                }
+                shape('#b1c1c9',[[35,0],[21,-2],[3,-3.5],[-25,-3.5],[-28,0],[-25,3.5],[3,3.5],[21,2]]);
+                shape('#243e51',[[25,0],[16,-1.3],[7,-1.3],[5,0],[7,1.3],[16,1.3]]);
+                for(const side of [-1,1]){
+                    shape(team,[[-12,side*2.8],[-20,side*6.3],[-27,side*6.3],[-24,side*2.8]]);
+                    for(const [x,y] of [[-3,18]]){
+                        shape('#e0e8eb',[[x+9,side*y],[x+5,side*y-1.2],[x-7,side*y-1.2],[x-7,side*y+1.2],[x+5,side*y+1.2]]);
+                    }
+                }
+                ctx.fillStyle='#1b2a32';ctx.fillRect(-28,-2.5,3,5);
+            }else{
+                // Slim simplified attack helicopter.
+                shape('#c2d1d6',[[-8,-2],[-33,-1],[-33,1],[-8,2]]);
+                shape(team,[[-27,-1],[-31,-7],[-34,-7],[-32,0],[-34,7],[-31,7],[-27,1]]);
+                shape(team,[[1,-3],[-3,-11],[-9,-11],[-7,-3],[-7,3],[-9,11],[-3,11],[1,3]]);
+                shape('#c2d1d6',[[24,0],[15,-3.5],[-6,-4],[-14,-2],[-14,2],[-6,4],[15,3.5]]);
+                shape('#0b1923',[[19,0],[12,-2],[2,-2],[2,2],[12,2]]);
+                ctx.strokeStyle='#172126';ctx.lineWidth=2;ctx.beginPath();
+                ctx.moveTo(-27,-17);ctx.lineTo(21,17);ctx.moveTo(-27,17);ctx.lineTo(21,-17);ctx.stroke();
+                ctx.fillStyle='#142632';ctx.beginPath();ctx.arc(-3,0,2.5,0,Math.PI*2);ctx.fill();
+            }
+        } else if(u.type==='harvester') {
+            ctx.rotate(u.angle);
+            ctx.fillStyle='#17292f';ctx.fillRect(-23,-15,46,7);ctx.fillRect(-23,8,46,7);
+            ctx.fillStyle=team;ctx.fillRect(-21,-10,42,20);
+            ctx.fillStyle='#a9bbc1';ctx.fillRect(10,-9,11,18);
+            ctx.fillStyle='#223b46';ctx.fillRect(13,-6,6,12);
+            ctx.fillStyle='#6d6249';ctx.fillRect(-20,-9,27,18);
+            ctx.strokeStyle='#c9b876';ctx.lineWidth=2;ctx.strokeRect(-20,-9,27,18);
+
+            ctx.fillStyle='#b9cbd0';ctx.fillRect(21,-11,5,22);
+        } else if(u.type==='antiAir') {
+            ctx.rotate(u.angle);ctx.fillStyle='#101719';ctx.fillRect(-20,-12,40,6);ctx.fillRect(-20,6,40,6);
+            ctx.fillStyle=team;ctx.fillRect(-18,-8,36,16);
+            ctx.rotate(-u.angle);ctx.rotate(u.turret);
+            ctx.fillStyle='#c5d7dc';ctx.fillRect(6,-5,23,1.4);ctx.fillRect(6,3.6,23,1.4);
+            ctx.fillStyle='#324956';ctx.beginPath();ctx.arc(0,0,10,0,Math.PI*2);ctx.fill();
+            ctx.fillStyle=team;ctx.fillRect(-7,-6,13,12);
+        } else if(u.type==='machineGunner') {
+            ctx.rotate(u.turret+Math.PI/2);
+            ctx.fillStyle='#344b57';ctx.beginPath();ctx.ellipse(0,1,7,9,0,0,Math.PI*2);ctx.fill();
+            ctx.fillStyle=team;ctx.fillRect(-8,-3,5,9);ctx.fillRect(3,-3,5,9);
+            ctx.fillStyle='#c9d2cf';ctx.beginPath();ctx.arc(0,-4,4.5,0,Math.PI*2);ctx.fill();
+            ctx.fillStyle='#26343b';ctx.fillRect(6,-15,3,18);
+            ctx.fillStyle='#aebfc6';ctx.fillRect(6.5,-20,2,7);
+
+
+        } else if (u.category === "infantry") {
+            // 身體朝向行進方向；武器獨立朝向 turret（瞄準方向）。
+            ctx.save();
+            ctx.rotate((u.angle ?? u.turret) + Math.PI / 2);
+            ctx.fillStyle = "#344b57";
+            ctx.beginPath();
+            ctx.ellipse(0, 1, 8, 10, 0, 0, 7);
+            ctx.fill();
+            ctx.fillStyle = team;
+            ctx.fillRect(-9, -4, 6, 9);
+            ctx.fillRect(3, -4, 6, 9);
+            ctx.fillStyle = "#c9d2cf";
+            ctx.beginPath();
+            ctx.arc(0, -5, 5, 0, 7);
+            ctx.fill();
+            ctx.restore();
+
+            ctx.save();
+            ctx.rotate((u.turret ?? u.angle) + Math.PI / 2);
+            if (u.type === "rocketSoldier") {
+                ctx.translate(6, 0);
+                ctx.fillStyle = "#26343b";
+                ctx.fillRect(-3, -15, 6, 23);
+                ctx.fillStyle = "#aebfc6";
+                ctx.fillRect(-4, -16, 8, 5);
+            } else {
+                ctx.fillStyle = "#26343b";
+                ctx.fillRect(-2, -12, 4, 20);
+                ctx.fillStyle = "#aebfc6";
+                ctx.fillRect(-1, -16, 2, 7);
+            }
+            ctx.restore();
+        } else {
+            ctx.rotate(u.angle);
+            // 坦克車身；只有砲塔與砲管獨立旋轉。
+            ctx.fillStyle = "#101719";
+            ctx.fillRect(-20, -12, 40, 6);
+            ctx.fillRect(-20, 6, 40, 6);
+
+            ctx.fillStyle = team;
+            ctx.fillRect(-18, -8, 36, 16);
+            ctx.rotate(-u.angle);
+            ctx.rotate(u.turret);
+            ctx.fillStyle = "#c2d1d6";
+            ctx.fillRect(3, -2, 27, 4);
+            ctx.fillStyle = "#243c47";
+            ctx.fillRect(-9,-8,18,16);
+            ctx.fillStyle = "#647e8b";
+            ctx.fillRect(-6,-5,12,10);
+
+        }
+
+        ctx.restore();
+        if(!thumbnailMode){
+            health(u,c,u.category==='infantry'?28:44);
+
+
+        }
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, W, H);
+        ctx.fillStyle = "#658b6c";
+        ctx.fillRect(0, 0, W, H);
+        ctx.strokeStyle = "rgba(30,70,45,.22)";
+
+        for (let x = 0; x < W; x += 80) {
+            ctx.beginPath();
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x, H);
+            ctx.stroke();
+        }
+        for (let y = 0; y < H; y += 80) {
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(W, y);
+            ctx.stroke();
+        }
+
+        drawMines();
+        drawOverlays();
+        drawBuildings();
+        for (const u of units) if(u.layer!=='air')drawUnit(u);
+        for (const u of units) if(u.layer==='air')drawUnit(u);
+
+        ctx.strokeStyle = "#ffe8a1";
+        for (const s of shots) {
+            ctx.beginPath();
+            ctx.moveTo(s.a.x, s.a.y);
+            ctx.lineTo(s.b.x, s.b.y);
+            ctx.stroke();
+        }
+
+        if (placing && mouse.inside) {
+            const d = B[placing];
+            const x = mouse.x - d.width / 2;
+            const y = mouse.y - d.height / 2;
+            const ok = canBuild(placing, x, y);
+            ctx.fillStyle = ok ? "#50ff7855" : "#ff464655";
+            ctx.fillRect(x, y, d.width, d.height);
+            ctx.strokeStyle = ok ? "#70ff90" : "#ff5555";
+            ctx.strokeRect(x, y, d.width, d.height);
+        }
+
+        if (drag.active && drag.moved) {
+            const x = Math.min(drag.sx, drag.ex);
+            const y = Math.min(drag.sy, drag.ey);
+            const w = Math.abs(drag.ex - drag.sx);
+            const h = Math.abs(drag.ey - drag.sy);
+
+            ctx.fillStyle = "#baff7520";
+            ctx.strokeStyle = "#baff75";
+            ctx.setLineDash([6, 4]);
+            ctx.fillRect(x, y, w, h);
+            ctx.strokeRect(x, y, w, h);
+            ctx.setLineDash([]);
+        }
+        for(const b of buildings)drawBuildingHealth(b);
+        // Cargo overlays render after every unit and building health bar.
+        for(const u of units){
+            if(u.type!=='harvester'||u.hp<=0)continue;
+            const c=center(u);
+            ctx.fillStyle='#263b3d';ctx.fillRect(c.x-22,c.y+u.radius+5,44,4);
+            ctx.fillStyle='#ebca64';ctx.fillRect(c.x-22,c.y+u.radius+5,44*Math.max(0,Math.min(1,u.cargo/u.capacity)),4);
+        }
+        drawMineLabels();
+        if(paused){ctx.save();ctx.fillStyle='rgba(12,22,30,.42)';ctx.fillRect(0,0,W,H);ctx.fillStyle='#ffffff';ctx.font='bold 58px sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('暫停',W/2,H/2);ctx.restore();}
+    }
+
+    const drag = {
+        active: false, pointer: null,
+        sx: 0, sy: 0, ex: 0, ey: 0,
+        cx: 0, cy: 0, moved: false, shift: false
+    };
+
+    canvas.addEventListener("pointermove", e => {
+        mouse = pos(e);
+        const r = canvas.getBoundingClientRect();
+        mouse.inside =
+            e.clientX >= r.left && e.clientX <= r.right &&
+            e.clientY >= r.top && e.clientY <= r.bottom;
+
+        if (drag.active && drag.pointer === e.pointerId) {
+            drag.ex = mouse.x;
+            drag.ey = mouse.y;
+            if (Math.hypot(e.clientX - drag.cx, e.clientY - drag.cy) > 5) {
+                drag.moved = true;
+            }
+        }
+    });
+
+    canvas.addEventListener("pointerdown", e => {
+        if (training || e.button !== 0 || drag.active) return;
+
+        const p = pos(e);
+        if (attackMode) {issueFormation(units.filter(u=>selected.has(u.id)),p,true);attackMode=false;return;}
+        if (placing) {
+            const d = B[placing];
+            const x = p.x - d.width / 2;
+            const y = p.y - d.height / 2;
+
+            if (construct(placing, x, y)) {
+                placing = null;
+                updateUI();
+                return;
+            } else {
+                notice("無法放置：需生產完成、科技條件滿足，並在己方建築中心 240 範圍內的空地");
+                return;
+            }
+        }
+
+        drag.active = true;
+        drag.pointer = e.pointerId;
+        drag.sx = drag.ex = p.x;
+        drag.sy = drag.ey = p.y;
+        drag.cx = e.clientX;
+        drag.cy = e.clientY;
+        drag.moved = false;
+        drag.shift = e.shiftKey;
+        canvas.setPointerCapture(e.pointerId);
+    });
+
+    canvas.addEventListener("pointerup", e => {
+        if (!drag.active || drag.pointer !== e.pointerId) return;
+
+        const p = pos(e);
+        drag.ex = p.x;
+        drag.ey = p.y;
+
+        if (!drag.shift) selected.clear();
+        selectedBuilding = null;
+
+        if (drag.moved) {
+            lastUnitClick=null;
+            const x = Math.min(drag.sx, drag.ex);
+            const y = Math.min(drag.sy, drag.ey);
+            const w = Math.abs(drag.ex - drag.sx);
+            const h = Math.abs(drag.ey - drag.sy);
+
+            for (const u of units) {
+                const c = center(u);
+                if (
+                    u.team === TEAM &&
+                    c.x >= x && c.x <= x + w &&
+                    c.y >= y && c.y <= y + h
+                ) selected.add(u.id);
+            }
+        } else {
+            for (let i = units.length - 1; i >= 0; i--) {
+                const u = units[i];
+                const c = center(u);
+                if (
+                    u.team === TEAM &&
+                    Math.hypot(p.x - c.x, p.y - c.y) < u.radius
+                ) {
+                    selectUnitClick(u,performance.now());
+                    break;
+                }
+            }
+        }
+
+        if (!drag.moved && !selected.size) {
+            lastUnitClick=null;
+            const b = buildings.find(b=>b.team===TEAM && p.x>=b.x && p.x<=b.x+b.width && p.y>=b.y && p.y<=b.y+b.height);
+            selectedBuilding = b ? b.id : null;
+        }
+        drag.active = false;
+        drag.pointer = null;
+    });
+
+    canvas.addEventListener("contextmenu", e => {
+        e.preventDefault();
+        if(training)return;
+        const p = pos(e);
+
+        if (placing) {
+            placing = null;
+            return;
+        }
+
+        attackMode = false;
+        if (selectedBuilding) {
+            const b = buildings.find(b=>b.id===selectedBuilding);
+            if (b && ['factory','barracks','airTower'].includes(b.type)) { b.rally={x:p.x,y:p.y}; notice('集結點已設定'); }
+            return;
+        }
+        const arr = units.filter(u => selected.has(u.id));
+        if (!arr.length) return;
+
+        // 先判斷右鍵是否點到敵軍：明確攻擊命令優先於地面移動。
+        let enemy = null;
+        let hit = Infinity;
+
+        // 和基礎版本的攻擊指令一致：右鍵敵軍單位或建築都能指定攻擊。
+        for (const v of [...buildings, ...units]) {
+            if (v.team === TEAM || v.hp <= 0) continue;
+            const c = center(v);
+            const d = Math.hypot(p.x - c.x, p.y - c.y);
+            const hitRadius = v.radius || Math.max(v.width, v.height) / 2;
+            if ((v.radius ? d <= Math.max(hitRadius + 7,22) : p.x>=v.x && p.x<=v.x+v.width && p.y>=v.y && p.y<=v.y+v.height) && d < hit) {
+                enemy = v;
+                hit = d;
+            }
+        }
+
+        const clickedMine=mines.find(m=>Math.hypot(m.x-p.x,m.y-p.y)<75&&m.ore>0);
+        const clickedRefinery=buildings.find(b=>b.team===TEAM&&b.type==='refinery'&&p.x>=b.x&&p.x<=b.x+b.width&&p.y>=b.y&&p.y<=b.y+b.height);
+        for(const u of arr.filter(u=>u.type==='harvester')){
+            if(clickedMine)startHarvest(u,clickedMine.id);
+            else if(clickedRefinery){startHarvest(u);u.miningState='return';u.refineryId=clickedRefinery.id;u.dock=null;}
+        }
+        if(clickedMine||clickedRefinery){
+            issueFormation(arr.filter(u=>u.type!=='harvester'),p);
+            return;
+        }
+        arr.sort((a, b) => a.id - b.id);
+
+        if (enemy) {
+            for (const u of arr) {
+                if(!canTarget(u,enemy)){issueMove(u,p);continue;}
+                clearOrder(u);
+                u.orderTargetId = enemy.id;
+                u.playerOrder = false;
+                u.engaging = false;
+                u.stuck = 0;
+                u.tx = u.x;
+                u.ty = u.y;
+            }
+            return;
+        }
+
+        issueFormation(arr,p,false);
+    });
+
+    function yieldToHarvester(u,dt){
+        if(u.type==='harvester'||u.layer==='air')return false;
+        const c=center(u);
+        const miner=spatialNear(c.x,c.y,110).find(v=>v.team===u.team&&v.type==='harvester'&&v.hp>0&&v.playerOrder&&Math.hypot(v.tx-v.x,v.ty-v.y)>8&&Math.hypot(center(v).x-c.x,center(v).y-c.y)<u.radius+v.radius+35);
+        if(!miner)return false;
+        const m=center(miner),dx=miner.tx-miner.x,dy=miner.ty-miner.y,d=Math.hypot(dx,dy),nx=dx/d,ny=dy/d;
+        const ahead=(c.x-m.x)*nx+(c.y-m.y)*ny;
+        const lateral=(c.x-m.x)*(-ny)+(c.y-m.y)*nx;
+        if(ahead < -u.radius || Math.abs(lateral)>u.radius+miner.radius+8)return false;
+        const sign=lateral<0?-1:1,step=u.speed*dt;
+        for(const side of [sign,-sign]){
+            const x=u.x-ny*side*step,y=u.y+nx*side*step;
+            if(travelClear(u,x,y)){u.x=x;u.y=y;u.angle=Math.atan2(nx*side,-ny*side);u.path=null;spatialMove(u);return true;}
+        }
+        return false;
+    }
+    function travelClear(u,x,y){
+        if(!canStand(u,x,y))return false;
+        const c=center(u),dx=x-u.x,dy=y-u.y,length2=dx*dx+dy*dy;
+        // Exact swept-circle test prevents crossing or grazing another unit.
+        for(const v of spatialNear(c.x+dx/2,c.y+dy/2,Math.sqrt(length2)/2+u.radius+55)){
+            if(v.id===u.id||v.hp<=0||(v.layer==='air')!==(u.layer==='air'))continue;
+            const q=center(v),t=length2?Math.max(0,Math.min(1,((q.x-c.x)*dx+(q.y-c.y)*dy)/length2)):0;
+            if(Math.hypot(c.x+t*dx-q.x,c.y+t*dy-q.y)<u.radius+v.radius+2-1e-7)return false;
+        }
+        if(u.layer!=='air'){
+            const n=Math.max(1,Math.ceil(Math.sqrt(length2)/2));
+            for(let i=1;i<=n;i++)if(!staticFree(u,u.x+dx*i/n,u.y+dy*i/n))return false;
+        }
+        return true;
+    }
+    function advanceUnit(u,goal,dt){
+        const dx=goal.x-u.x,dy=goal.y-u.y,d=Math.hypot(dx,dy);
+        if(d<.01)return true;
+        const step=Math.min(d,u.speed*dt),a=Math.atan2(dy,dx);
+        const ahead=Math.min(d,Math.max(step,u.radius*.7+u.speed*.18));
+        const side=u.avoidSide||1;
+        const offsets=[0,.4*side,-.4*side,.8*side,-.8*side,1.2*side,-1.2*side,Math.PI/2*side,-Math.PI/2*side,1.95*side,-1.95*side];
+        for(const look of [ahead,step]){
+            for(const off of offsets){
+                const angle=a+off,nx=Math.cos(angle),ny=Math.sin(angle);
+                if(!travelClear(u,u.x+nx*look,u.y+ny*look))continue;
+                u.x+=nx*step;u.y+=ny*step;u.angle=angle;
+                if(u.category==='infantry'||u.layer==='air')u.turret=angle;
+                u.avoidSide=off===0?null:Math.sign(off);spatialMove(u);return true;
+            }
+        }
+        return false;
+    }
+    function movement(u, dt) {
+        if(yieldToHarvester(u,dt))return;
+        if(u.engaging&&(u.layer==='air'||u.type!=='tank'))return;
+        if(u.attackMove&&!u.orderTargetId&&!u.engaging){u.tx=u.attackMove.x;u.ty=u.attackMove.y;u.playerOrder=true;}
+        const distance=Math.hypot(u.tx-u.x,u.ty-u.y);
+        if(distance<(u.arrivalGoal?1:2)){
+            u.playerOrder=false;u.chasingTarget=false;u.attackMove=null;u.path=null;return;
+        }
+        if(u.moveTarget&&!u.orderTargetId&&!u.chasingTarget&&!u.engaging){
+            if(u.moveProgress==null||distance<u.moveProgress-3){u.moveProgress=distance;u.congested=0;}
+            else u.congested=(u.congested||0)+dt;
+            if(u.congested>1.2&&Math.hypot(center(u).x-u.moveTarget.x,center(u).y-u.moveTarget.y)<400){
+                // A packed inner slot can become unreachable. Settle at the closest
+                // accessible free spot instead of pushing through the surrounding units.
+                const spot=nearestMoveSpot(u,u.moveTarget,[],new Set([u.id]),true)||center(u);
+                if(spot){u.tx=spot.x-u.width/2;u.ty=spot.y-u.height/2;u.arrivalGoal=spot;u.path=null;if(u.attackMove)u.attackMove={x:u.tx,y:u.ty};}
+                u.moveProgress=null;u.congested=0;
+            }
+        }
+        let goal={x:u.tx,y:u.ty};
+        if(u.layer!=='air'){
+            u.repath=Math.max(0,(u.repath||0)-dt);
+            if(!u.path||u.pathRevision!==topology||(u.repath===0&&Math.hypot(u.pathGoalX-u.tx,u.pathGoalY-u.ty)>16)){
+                u.path=findPath(u,u.tx,u.ty);u.pathRevision=topology;u.pathGoalX=u.tx;u.pathGoalY=u.ty;u.repath=.7;
+            }
+            while(u.path.length&&Math.hypot(u.path[0].x-u.x,u.path[0].y-u.y)<(u.path.length===1?1:8))u.path.shift();
+            goal=u.path[0];
+        }
+        const moved=goal&&advanceUnit(u,goal,dt);
+        u.stuck=moved?0:(u.stuck||0)+dt;
+        if(u.stuck>1){u.path=null;u.stuck=0;}
+    }
+
+    function combat(dt) {
+        for (const u of units) {
+            if (u.hp <= 0 || u.damage<=0) continue;
+            u.cool = Math.max(0, u.cool - dt);
+
+            const isInfantry =
+                u.type === "machineGunner" || u.type === "rocketSoldier";
+            const isMoving =
+                !!u.playerOrder && Math.hypot(u.tx - u.x, u.ty - u.y) > 7;
+
+            // 步兵有移動指令時不能邊走邊射；坦克可以。
+            if (isInfantry && isMoving && !u.chasingTarget && !u.attackMove) {
+                u.engaging = false;
+                continue;
+            }
+
+            const c = center(u);
+            let target = null;
+            let near = Infinity;
+
+            // 優先鎖定玩家指定的敵軍目標；目標可以是單位或建築。
+            const ordered = [...buildings, ...units].find(
+                v => v.id === u.orderTargetId &&
+                    v.team !== u.team && v.hp > 0 && canTarget(u,v)
+            );
+
+            // 有攻擊指令就打指定目標；沒有指令才自動攻擊射程內最近的敵人。
+            if (ordered) {
+                target = ordered;
+                const p = center(target);
+                near = Math.hypot(p.x - c.x, p.y - c.y);
+            } else {
+                if (u.orderTargetId != null) { u.orderTargetId=null; u.chasingTarget=false; u.playerOrder=false; u.tx=u.x;u.ty=u.y;u.path=null; }
+
+                // 坦克移動時仍會攻擊射程內敵人，但不改動原本移動路線。
+                // 步兵只有在沒有移動指令時才自動選擇目標。
+                if (!u.playerOrder || u.category === "vehicle" || u.attackMove) {
+                    // 自動攻擊時也可選取射程內最近的敵方單位或建築。
+                    let candidates=[...buildings,...spatialNear(c.x,c.y,u.attackRange+80)];
+                    if(u.team===ENEMY||training){const soldiers=candidates.filter(v=>v.team!==u.team&&v.hp>0&&v.damage>0&&canTarget(u,v)&&Math.hypot(center(v).x-c.x,center(v).y-c.y)<=u.attackRange);if(soldiers.length)candidates=soldiers;}
+                    for (const v of candidates) {
+                        if (v.team === u.team || v.hp <= 0 || !canTarget(u,v)) continue;
+                        const p = center(v);
+                        const d = Math.hypot(p.x - c.x, p.y - c.y);
+                        if (d <= (u.attackRange || 250) && d < near) {
+                            target = v;
+                            near = d;
+                        }
+                    }
+                }
+            }
+
+            u.engaging = false;
+
+            if (target) {
+                const p = center(target);
+                const a = Math.atan2(p.y - c.y, p.x - c.x);
+                const diff = Math.atan2(
+                    Math.sin(a - u.turret),
+                    Math.cos(a - u.turret)
+                );
+
+                u.turret=a;
+                if(isInfantry||u.layer==='air')u.angle=a;
+
+                /*
+                 * 修正：以單位中心點距離判斷射程。
+                 * 指定攻擊目標在射程外就追擊；進入射程後停止追擊。
+                 * 目標離開射程後，會重新追上去。
+                 */
+                if (near > u.attackRange) {
+                    if (ordered || !u.playerOrder) {
+                        u.chasingTarget = true;
+                        const stop = Math.max(0, u.attackRange - 10);
+                        const goalX =
+                            p.x - Math.cos(a) * stop - u.width / 2;
+                        const goalY =
+                            p.y - Math.sin(a) * stop - u.height / 2;
+
+                        u.tx = Math.max(0, Math.min(W - u.width, goalX));
+                        u.ty = Math.max(0, Math.min(H - u.height, goalY));
+                        u.playerOrder = true;
+                    }
+                } else if (ordered) {
+                    // 有指定攻擊目標：在射程內停止移動，目標移動出射程再追擊。
+                    u.chasingTarget = false;
+                    u.tx = u.x;
+                    u.ty = u.y;
+                    u.playerOrder = false;
+                    u.engaging = true;
+                } else if (u.attackMove) {
+                    u.engaging = true; u.playerOrder = false; u.tx=u.x; u.ty=u.y;
+                } else if (!isMoving) {
+                    u.engaging = true;
+                    if (isInfantry) {
+                        u.tx = u.x;
+                        u.ty = u.y;
+                    }
+                }
+
+                const fireDiff = Math.atan2(
+                    Math.sin(a - u.turret),
+                    Math.cos(a - u.turret)
+                );
+
+                if (
+                    Math.abs(fireDiff) < 0.22 &&
+                    u.cool <= 0 &&
+                    near <= u.attackRange
+                ) {
+                    if (!isMoving) u.engaging = true;
+                    target.lastAttackerId = u.id;
+                    recordDamage(u, target, u.damage * damageMultiplier(u,target));
+                    u.cool = u.interval;
+                    if(!training)shots.push({ a: c, b: p, life: 0.12 });
+                }
+            } else {
+                if (u.attackMove) { u.tx=u.attackMove.x; u.ty=u.attackMove.y; u.playerOrder=true; }
+                u.engaging = false;
+                u.turret = u.angle;
+                u.chasingTarget = false;
+            }
+        }
+
+
+
+        for (let i = shots.length - 1; i >= 0; i--) {
+            shots[i].life -= dt;
+            if (shots[i].life <= 0) shots.splice(i, 1);
+        }
+
+        for (let i = units.length - 1; i >= 0; i--) {
+            if (units[i].hp <= 0) {
+                selected.delete(units[i].id);
+                units.splice(i, 1);
+            }
+        }
+        // 建築生命值歸零就摧毀並移除；工廠/兵營失去後允許重建。
+        for (let i = buildings.length - 1; i >= 0; i--) {
+            if (buildings[i].hp <= 0) {
+                const dead = buildings[i];
+                buildings.splice(i, 1); topology++;
+                if (dead.type === 'factory' || dead.type === 'barracks') {
+                    for (const type of Object.keys(U)) if (U[type].building === dead.type) {
+                        cash[dead.team] += q(type,dead.team).length*COST[type]; q(type,dead.team).length=0;
+                    }
+                }
+
+            }
+        }
+    }
+
+    function checkVictory(){
+        if(matchEnded)return;
+        const blueHQ=buildings.find(b=>b.team===TEAM&&b.type==='base'&&b.hp>0),redHQ=buildings.find(b=>b.team===ENEMY&&b.type==='base'&&b.hp>0);
+        if(blueHQ&&redHQ&&!(training&&elapsed>=300))return;
+        if(training){finishTrainingRound(blueHQ&&redHQ?null:blueHQ?TEAM:redHQ?ENEMY:null);return;}
+        settleNeural(true,redHQ&&!blueHQ?1:blueHQ&&!redHQ?-1:0);neural.episodes++;saveNeural();
+        matchEnded=true;
+        document.querySelector('#resultText').textContent=blueHQ?'藍方勝利':redHQ?'紅方勝利':'平手';
+        document.querySelector('#result').hidden=false;
+    }
+
+    function resetMatch() {
+        if(neuralPending){settleNeural(false);saveNeural();}
+        document.querySelector('#result').hidden=true;
+        document.querySelector('#pauseGame').textContent='暫停';lastUnitClick=null;
+        neuralPending=null;neuralReward=0;assault[0]=assault[1]=false;
+        cash[0]=cash[1]=1600;buildQueues[0].length=buildQueues[1].length=0;elapsed=0;roundStats[0]={};roundStats[1]={};
+        accumulator=0; paused=false; for(const m of mines)m.ore=m.maxOre;refineryGifts.length=0; topology++; selectedBuilding=null; attackMode=false;
+        drag.active=false; drag.pointer=null; groups.clear();
+        for(const type of Object.keys(enemyQueues)) enemyQueues[type].length=0;
+
+        matchEnded = false;
+        placing = null;
+        selected.clear();
+        shots.length = 0;
+        for (const type of Object.keys(queues)) queues[type].length = 0;
+        buildings.length = 0;
+        buildings.push(building(TEAM, "base", 80, 360));
+        buildings.push(building(ENEMY, "base", 1400, 360));
+        units.length = 0;
+        ai.thinkTimer = 0;
+        ai.attackTimer=0;
+        rebuildSpatial();updateUI();
+    }
+
+    function update(dt) {
+        if (matchEnded || paused) return;
+        elapsed+=dt; messageTime=Math.max(0,messageTime-dt);
+        updateBuildingProduction(dt);
+        rebuildSpatial();
+        combat(dt);
+        updateMining(dt);
+        for(const u of units) movement(u,dt);
+        updateProduction(dt,TEAM); updateProduction(dt,ENEMY);
+        updateEnemyAI(dt); checkVictory();
+    }
+    function frame(t) {
+        if (!last) last=t;
+        const dt=Math.min((t-last)/1000,.1);last=t;
+        if(!training&&!paused&&!matchEnded)accumulator+=dt;
+        let steps=0;
+        while(!training&&accumulator>=1/60 && steps++<48){accumulator-=1/60;update(1/60);}
+        uiTimer+=dt; if(uiTimer>=.1){updateUI();uiTimer=0;}
+        draw(); requestAnimationFrame(frame);
+    }
+
+
+
+    for(const name of ['building','unit'])document.querySelector('#'+name+'Tab').onclick=()=>{
+        for(const other of ['building','unit']){
+            document.querySelector('#'+other+'Panel').hidden=other!==name;
+            document.querySelector('#'+other+'Tab').classList.toggle('active',other===name);
+            document.querySelector('#'+other+'Tab').setAttribute('aria-pressed',String(other===name));
+        }
+        if(name!=='building')placing=null;
+    };
+
+
+    // 靜態障礙 A* + 單位空間索引；只有建築變動才重建障礙格。
+    const spatial = new Map(), occupancy = new Map();
+    const CELL=32, NX=Math.ceil(W/CELL), NY=Math.ceil(H/CELL);
+    function spatialKey(x,y){return `${Math.floor(x/96)},${Math.floor(y/96)}`;}
+    function spatialMove(u){
+        const c=center(u), key=spatialKey(c.x,c.y);
+        if(u.cellKey===key && spatial.get(key)?.has(u)) return;
+        if(u.cellKey) spatial.get(u.cellKey)?.delete(u);
+        if(!spatial.has(key)) spatial.set(key,new Set());
+        spatial.get(key).add(u);u.cellKey=key;
+    }
+    function rebuildSpatial(){spatial.clear();for(const u of units) if(u.hp>0){u.cellKey=null;spatialMove(u);}}
+    function spatialNear(x,y,r){
+        const out=[];
+        for(let cy=Math.floor((y-r)/96);cy<=Math.floor((y+r)/96);cy++)
+            for(let cx=Math.floor((x-r)/96);cx<=Math.floor((x+r)/96);cx++)
+                for(const u of spatial.get(`${cx},${cy}`)||[]) if(u.hp>0) out.push(u);
+        return out;
+    }
+    function staticFree(u,x,y){
+        const cx=x+u.width/2,cy=y+u.height/2;
+        return cx>=u.radius && cy>=u.radius && cx<=W-u.radius && cy<=H-u.radius &&
+            (u.layer==='air'||!buildings.some(b=>b.hp>0&&hitRect(cx,cy,u.radius+3,b)));
+    }
+    function obstacleGrid(u){
+        const key=u.radius;
+        const old=occupancy.get(key);if(old?.revision===topology)return old.grid;
+        const grid=new Uint8Array(NX*NY);
+        for(let y=0;y<NY;y++)for(let x=0;x<NX;x++)
+            grid[y*NX+x]=staticFree(u,x*CELL+CELL/2-u.width/2,y*CELL+CELL/2-u.height/2)?0:1;
+        occupancy.set(key,{revision:topology,grid});return grid;
+    }
+    function lineFree(u,x,y){
+        const n=Math.max(1,Math.ceil(Math.hypot(x-u.x,y-u.y)/8));
+        for(let i=1;i<=n;i++)if(!staticFree(u,u.x+(x-u.x)*i/n,u.y+(y-u.y)*i/n))return false;
+        return true;
+    }
+    function findPath(u,tx,ty){
+        if(lineFree(u,tx,ty))return [{x:tx,y:ty}];
+        const grid=obstacleGrid(u), c=center(u);
+        const sx=Math.min(NX-1,Math.max(0,Math.floor(c.x/CELL))),sy=Math.min(NY-1,Math.max(0,Math.floor(c.y/CELL)));
+        let gx=Math.min(NX-1,Math.max(0,Math.floor((tx+u.width/2)/CELL))),gy=Math.min(NY-1,Math.max(0,Math.floor((ty+u.height/2)/CELL)));
+        // 目的地在障礙中時，改用鄰近可走的格點。
+        if(grid[gy*NX+gx]){
+            let best=Infinity;
+            for(let y=0;y<NY;y++)for(let x=0;x<NX;x++)if(!grid[y*NX+x]){
+                const d=(x-gx)**2+(y-gy)**2;if(d<best){best=d;var bestX=x,bestY=y;}
+            }
+            if(best===Infinity)return [];gx=bestX;gy=bestY;
+        }
+        const start=sy*NX+sx, requestedGoal=gy*NX+gx;
+        let goal=requestedGoal,nearest=start,nearestDistance=Infinity;
+        const scores=new Float64Array(NX*NY).fill(Infinity),parents=new Int32Array(NX*NY).fill(-1),closed=new Uint8Array(NX*NY);
+        const heap=[];
+        function push(id,f){let i=heap.length;heap.push({id,f});while(i){const p=(i-1)>>1;if(heap[p].f<=f)break;[heap[p],heap[i]]=[heap[i],heap[p]];i=p;}}
+        function pop(){const root=heap[0],tail=heap.pop();if(heap.length){heap[0]=tail;let i=0;while(true){let j=i*2+1;if(j>=heap.length)break;if(j+1<heap.length&&heap[j+1].f<heap[j].f)j++;if(heap[i].f<=heap[j].f)break;[heap[i],heap[j]]=[heap[j],heap[i]];i=j;}}return root.id;}
+        scores[start]=0;push(start,0);
+        while(heap.length){
+            const at=pop();if(closed[at])continue;
+            const x=at%NX,y=Math.floor(at/NX),distance=Math.hypot(gx-x,gy-y);
+            if(distance<nearestDistance){nearestDistance=distance;nearest=at;}
+            if(at===goal)break;closed[at]=1;
+            for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]]){
+                const xx=x+dx,yy=y+dy,n=yy*NX+xx;
+                if(xx<0||yy<0||xx>=NX||yy>=NY||grid[n]||closed[n])continue;
+                if(dx&&dy&&(grid[y*NX+xx]||grid[yy*NX+x]))continue;
+                const g=scores[at]+(dx&&dy?Math.SQRT2:1);
+                if(g<scores[n]){scores[n]=g;parents[n]=at;push(n,g+Math.hypot(gx-xx,gy-yy));}
+            }
+        }
+        // If the target is sealed off, approach the closest reachable cell.
+        if(goal!==start&&parents[goal]===-1)goal=nearest;
+        if(goal===start&&goal!==requestedGoal){u.tx=u.x;u.ty=u.y;if(u.attackMove)u.attackMove={x:u.x,y:u.y};return [];}
+
+        const result=[];let at=goal;
+        while(at!==start&&at>=0){result.push({x:(at%NX)*CELL+CELL/2-u.width/2,y:Math.floor(at/NX)*CELL+CELL/2-u.height/2});at=parents[at];}
+        result.reverse();
+        if(goal===requestedGoal&&staticFree(u,tx,ty) && Math.hypot(gx*CELL+CELL/2-(tx+u.width/2),gy*CELL+CELL/2-(ty+u.height/2))<CELL)result.push({x:tx,y:ty});
+        else if(result.length){u.tx=result[result.length-1].x;u.ty=result[result.length-1].y;if(u.attackMove)u.attackMove={x:u.tx,y:u.ty};}
+        return result;
+    }
+    function clearOrder(u){u.arrivalGoal=null;u.moveTarget=null;u.moveProgress=null;u.congested=0;u.avoidSide=null;if(u.type==='harvester')u.harvesting=false;u.orderTargetId=null;u.chasingTarget=false;u.engaging=false;u.playerOrder=false;u.attackMove=null;u.path=null;u.stuck=0;}
+    function nearestMoveSpot(u,p,reserved=[],movingIds=new Set([u.id]),reachable=false){
+        const air=u.layer==='air',c=center(u);
+        const blockers=units.filter(v=>v.hp>0&&!movingIds.has(v.id)&&(v.layer==='air')===air).map(v=>({
+            x:(v.playerOrder?v.tx:v.x)+v.width/2,y:(v.playerOrder?v.ty:v.y)+v.height/2,radius:v.radius
+        }));
+        const free=(x,y)=>staticFree(u,x-u.width/2,y-u.height/2)&&
+            !reserved.some(v=>Math.hypot(x-v.x,y-v.y)<u.radius+v.radius+6)&&
+            !blockers.some(v=>Math.hypot(x-v.x,y-v.y)<u.radius+v.radius+6)&&
+            (!reachable||travelClear(u,x-u.width/2,y-u.height/2));
+        const origin={x:Math.max(u.radius,Math.min(W-u.radius,p.x)),y:Math.max(u.radius,Math.min(H-u.radius,p.y))};
+        const bearing=Math.atan2(c.y-origin.y,c.x-origin.x);
+        const limit=reachable?Math.hypot(c.x-origin.x,c.y-origin.y)+u.radius*2+24:Math.hypot(W,H);
+        for(let r=0;r<limit;r+=6){
+            const count=r===0?1:Math.max(12,Math.ceil(Math.PI*2*r/12));
+            let best=null,bestDistance=Infinity;
+            for(let i=0;i<count;i++){
+                const a=bearing+i*Math.PI*2/count,x=origin.x+Math.cos(a)*r,y=origin.y+Math.sin(a)*r;
+                if(!free(x,y))continue;
+                const d=Math.hypot(x-c.x,y-c.y);
+                if(d<bestDistance){best={x,y};bestDistance=d;}
+            }
+            if(best)return best;
+        }
+        return null;
+    }
+    function issueMove(u,p,attack=false,assigned=null){
+        const goal=assigned||nearestMoveSpot(u,p);
+        clearOrder(u);
+        if(!goal){holdPosition(u);return;}
+        u.tx=goal.x-u.width/2;u.ty=goal.y-u.height/2;u.arrivalGoal={x:goal.x,y:goal.y};u.moveTarget={x:p.x,y:p.y};
+        if(attack)u.attackMove={x:u.tx,y:u.ty};u.playerOrder=true;
+    }
+    function damageMultiplier(a,b){
+        if(a.type==='antiAir')return b.layer==='air'||b.category==='air'?2.2:b.category==='infantry'?1.8:b.category==='vehicle'?.3:.25;
+        if(a.type==='machineGunner')return b.category==='infantry'?1.6:b.category==='vehicle'?.35:.4;
+        if(a.type==='rocketSoldier')return b.layer==='air'||b.category==='air'?2.2:b.category==='vehicle'?1.6:b.category==='infantry'?.55:1.2;
+        if(a.type==='helicopter')return b.category==='infantry'?1.5:1.3;
+        if(a.type==='fighter')return b.layer==='air'?2.2:.45;
+        if(a.type==='tank')return b.category==='infantry'?.35:1;
+        return 1;
+    }
+    function notice(text){message=text;messageTime=4;updateUI();}
+    function drawOverlays(){
+        ctx.save();
+        if(placing){
+            ctx.fillStyle='#70dfff12';ctx.strokeStyle='#98e8ff70';ctx.setLineDash([8,6]);
+            const centers=buildings.filter(b=>b.team===TEAM&&b.hp>0).map(center);
+            ctx.beginPath();for(const c of centers){ctx.moveTo(c.x+BUILD_RADIUS,c.y);ctx.arc(c.x,c.y,BUILD_RADIUS,0,Math.PI*2);}ctx.fill();
+            for(const c of centers){
+                for(let i=0;i<360;i++){const a=i*Math.PI/180,z=(i+1)*Math.PI/180,m=(a+z)/2;
+                    if(centers.some(o=>o!==c&&Math.hypot(c.x+BUILD_RADIUS*Math.cos(m)-o.x,c.y+BUILD_RADIUS*Math.sin(m)-o.y)<BUILD_RADIUS))continue;
+                    ctx.beginPath();ctx.arc(c.x,c.y,BUILD_RADIUS,a,z);ctx.stroke();
+                }
+            }
+            ctx.setLineDash([]);
+        }
+        for(const u of units.filter(u=>selected.has(u.id))){
+            const c=center(u);
+            const target=[...units,...buildings].find(v=>v.id===u.orderTargetId);
+            if(target){ctx.strokeStyle='#ffbd83';ctx.strokeRect(target.x-5,target.y-5,target.width+10,target.height+10);}
+        }
+        ctx.restore();
+    }
+    function togglePause(){if(matchEnded)return;paused=!paused;accumulator=0;trainingDebt=0;trainingLast=performance.now();document.querySelector('#pauseGame').textContent=paused?'繼續':'暫停';}
+    function stopSelected(){for(const u of units.filter(u=>selected.has(u.id))){clearOrder(u);u.tx=u.x;u.ty=u.y;}attackMode=false;}
+    document.addEventListener('keydown',e=>{
+        if(e.target.matches('input,textarea'))return;
+        const k=e.key.toLowerCase();
+        if(k===' '){e.preventDefault();togglePause();return;}
+        if(training)return;
+        if(k==='a'){attackMode=true;placing=null;notice('攻擊移動：左鍵選目的地');}
+        if(k==='s')stopSelected();
+        if(k==='escape'){attackMode=false;placing=null;}
+        if(/^[1-9]$/.test(k)){
+            e.preventDefault();if(e.ctrlKey)groups.set(k,[...selected]);
+            else{selected.clear();selectedBuilding=null;for(const id of groups.get(k)||[])if(units.some(u=>u.id===id&&u.team===TEAM))selected.add(id);}
+        }
+    });
+    canvas.addEventListener('pointercancel',()=>{drag.active=false;drag.pointer=null;});
+    document.querySelector('#playAgain').onclick=()=>resetMatch();
+    function resizeField(){
+        const r=canvas.parentElement.getBoundingClientRect();const scale=Math.min(r.width/W,r.height/H);
+        canvas.style.width=`${W*scale}px`;canvas.style.height=`${H*scale}px`;
+    }
+    new ResizeObserver(resizeField).observe(canvas.parentElement);
+    resizeField();rebuildSpatial();
+
+    function drawMines(){
+        for(const m of mines){
+            ctx.save();ctx.translate(m.x,m.y);
+            ctx.fillStyle=m.ore>0?'#2e2e2e':'##9b9b9b';ctx.beginPath();ctx.arc(0,0,75,0,Math.PI*2);ctx.fill();
+            const count=Math.ceil(m.ore/m.maxOre*32);
+            for(let i=0;i<count;i++){
+                const a=i*2.39996,r=9+Math.sqrt(i/32)*52,x=Math.cos(a)*r,y=Math.sin(a)*r;
+                ctx.fillStyle=i%3===0?'#595959':i%3===1?'#d6d6d6':'#8d8d8d';
+                ctx.beginPath();
+                for(let j=0;j<6;j++){
+                    const a=j*Math.PI/3,px=x+9*Math.cos(a),py=y+9*Math.sin(a);
+                    if(j===0)ctx.moveTo(px,py);
+                    else ctx.lineTo(px,py);}
+                    ctx.closePath();
+                    ctx.fill();
+            }
+            ctx.restore();
+        }
+    }
+    function drawMineLabels(){
+        ctx.save();
+        ctx.fillStyle='#FFFFFF';
+        ctx.font='30px sans-serif';
+        ctx.textAlign='center';
+        for(const m of mines){
+            ctx.fillText(Math.ceil(m.ore),m.x,m.y+10);
+        }
+        ctx.restore();
+    }
+    function startHarvest(u,mineId=null){
+        clearOrder(u);u.harvesting=true;u.mineId=mineId;u.mineSlot=null;u.dock=null;u.refineryId=null;
+        u.miningState=u.cargo>=u.capacity?'return':'seek';u.mineTimer=0;
+    }
+    function setDestination(u,p){
+        const tx=Math.max(u.radius-u.width/2,Math.min(W-u.radius-u.width/2,p.x-u.width/2));
+        const ty=Math.max(u.radius-u.height/2,Math.min(H-u.radius-u.height/2,p.y-u.height/2));
+        if(Math.hypot(tx-u.tx,ty-u.ty)>8)u.path=null;
+        u.tx=tx;u.ty=ty;u.playerOrder=true;
+    }
+    function holdPosition(u){u.tx=u.x;u.ty=u.y;u.playerOrder=false;u.path=null;}
+    function miningSlot(u,m){
+        let best=null,score=Infinity;
+        for(let i=0;i<12;i++){
+            if(units.some(v=>v!==u&&v.hp>0&&v.harvesting&&v.mineId===m.id&&v.mineSlot===i))continue;
+            const a=i*Math.PI/6,p={x:m.x+Math.cos(a)*65,y:m.y+Math.sin(a)*65};
+            if(!canStand(u,p.x-u.width/2,p.y-u.height/2))continue;
+            const d=Math.hypot(center(u).x-p.x,center(u).y-p.y);if(d<score){score=d;best={...p,slot:i};}
+        }
+        return best;
+    }
+    function refineryDock(b,u){
+        const c=center(u),r=u.radius+8,points=[];
+        const clamp=(v,a,z)=>Math.max(a,Math.min(z,v));
+        points.push({x:clamp(c.x,b.x,b.x+b.width),y:b.y-r},{x:clamp(c.x,b.x,b.x+b.width),y:b.y+b.height+r},
+            {x:b.x-r,y:clamp(c.y,b.y,b.y+b.height)},{x:b.x+b.width+r,y:clamp(c.y,b.y,b.y+b.height)});
+        for(let i=0;i<=4;i++){
+            points.push({x:b.x+b.width*i/4,y:b.y-r},{x:b.x+b.width*i/4,y:b.y+b.height+r},
+                {x:b.x-r,y:b.y+b.height*i/4},{x:b.x+b.width+r,y:b.y+b.height*i/4});
+        }
+        for(const x of [b.x,b.x+b.width])for(const y of [b.y,b.y+b.height])
+            points.push({x:x+(x===b.x?-1:1)*r/Math.SQRT2,y:y+(y===b.y?-1:1)*r/Math.SQRT2});
+        return points.filter(p=>canStand(u,p.x-u.width/2,p.y-u.height/2)&&!units.some(v=>v!==u&&v.hp>0&&v.refineryId===b.id&&v.dock&&Math.hypot(v.dock.x-p.x,v.dock.y-p.y)<u.radius+v.radius+2))
+            .sort((a,z)=>Math.hypot(a.x-c.x,a.y-c.y)-Math.hypot(z.x-c.x,z.y-c.y))[0]||null;
+    }
+    function updateMining(dt){
+        // Refinery's included vehicle waits for a clear exit, never spawns inside another object.
+        for(let i=refineryGifts.length-1;i>=0;i--){
+            const gift=refineryGifts[i],b=buildings.find(b=>b.id===gift.buildingId&&b.hp>0);
+            if(!b){refineryGifts.splice(i,1);continue;}
+            const spot=exitSpot(b,gift.unit);if(!spot)continue;
+            Object.assign(gift.unit,{x:spot.x,y:spot.y,tx:spot.x,ty:spot.y,angle:spot.a,turret:spot.a});
+            units.push(gift.unit);spatialMove(gift.unit);startHarvest(gift.unit);refineryGifts.splice(i,1);
+        }
+        for(const u of units){
+            if(u.type!=='harvester'||!u.harvesting||u.hp<=0)continue;
+            u.mineTimer=Math.max(0,(u.mineTimer||0)-dt);
+            if(u.miningState==='return'||u.cargo>=u.capacity){
+                u.miningState='return';u.mineSlot=null;
+                let b=buildings.find(b=>b.id===u.refineryId&&b.type==='refinery'&&b.team===u.team&&b.hp>0);
+                if(!b){
+                    b=buildings.filter(b=>b.type==='refinery'&&b.team===u.team&&b.hp>0).sort((a,b)=>Math.hypot(center(a).x-u.x,center(a).y-u.y)-Math.hypot(center(b).x-u.x,center(b).y-u.y))[0];
+                    u.refineryId=b?.id;u.dock=null;
+                }
+                if(!b){holdPosition(u);continue;}
+                const c=center(u),distance=Math.hypot(Math.max(b.x-c.x,0,c.x-b.x-b.width),Math.max(b.y-c.y,0,c.y-b.y-b.height));
+                if(distance<=u.radius+16){
+                    holdPosition(u);const unload=Math.min(u.cargo,150*dt);u.cargo-=unload;cash[u.team]+=unload;
+                    if(u.cargo<.001){u.cargo=0;u.miningState='seek';u.dock=null;u.refineryId=null;u.mineTimer=0;}
+                }else{
+                    if(!u.dock)u.dock=refineryDock(b,u);
+                    if(!u.dock){holdPosition(u);continue;}
+                    setDestination(u,u.dock);
+                    if(u.mineTimer===0){u.mineTimer=2;if(!canStand(u,u.dock.x-u.width/2,u.dock.y-u.height/2))u.dock=null;}
+                }
+                continue;
+            }
+            let m=mines.find(m=>m.id===u.mineId&&m.ore>0);
+            if(!m){
+                m=mines.filter(m=>m.ore>0).sort((a,b)=>Math.hypot(a.x-u.x,a.y-u.y)-Math.hypot(b.x-u.x,b.y-u.y))[0];
+                u.mineId=m?.id;u.mineSlot=null;
+            }
+            if(!m){if(u.cargo>0)u.miningState='return';else holdPosition(u);continue;}
+            if(u.mineSlot===null||u.mineSlot===undefined){
+                const slot=miningSlot(u,m);if(!slot){holdPosition(u);continue;}u.mineSlot=slot.slot;
+            }
+            const a=u.mineSlot*Math.PI/6,goal={x:m.x+Math.cos(a)*65,y:m.y+Math.sin(a)*65};
+            if(Math.hypot(center(u).x-goal.x,center(u).y-goal.y)<18){
+                holdPosition(u);u.miningState='harvest';
+                const amount=Math.min(m.ore,u.capacity-u.cargo,50*dt);m.ore-=amount;u.cargo+=amount;
+                if(u.cargo>=u.capacity-.001||m.ore<=.001){u.miningState='return';u.mineSlot=null;u.dock=null;}
+            }else{
+                u.miningState='seek';setDestination(u,goal);
+                if(u.mineTimer===0){u.mineTimer=2;if(!canStand(u,goal.x-u.width/2,goal.y-u.height/2))u.mineSlot=null;}
+            }
+        }
+    }
+
+
+
+    function issueFormation(squad,p,attack=false){
+        // Reserve the closest available spots independently for each collision layer.
+        // No rigid formation or shared speed: every unit approaches at its own speed.
+        const movingIds=new Set(squad.map(u=>u.id));
+        for(const air of [false,true]){
+            const reserved=[];
+            const group=squad.filter(u=>(u.layer==='air')===air).sort((a,b)=>
+                Math.hypot(center(a).x-p.x,center(a).y-p.y)-Math.hypot(center(b).x-p.x,center(b).y-p.y)||a.id-b.id);
+            for(const u of group){
+                const goal=nearestMoveSpot(u,p,reserved,movingIds);
+                if(!goal){clearOrder(u);holdPosition(u);continue;}
+                reserved.push({...goal,radius:u.radius});issueMove(u,p,attack,goal);
+            }
+        }
+    }
+
+    document.querySelector('#restartGame').onclick=()=>{if(training){settleNeural(false);saveNeural();}resetMatch();trainingDebt=0;trainingLast=performance.now();};
+    document.querySelector('#pauseGame').onclick=togglePause;
+    document.querySelector('#trainAI').onclick=toggleTraining;
+    try{const saved=JSON.parse(localStorage.getItem('rts-training-results-v1')||'null');if(saved&&saved.mode==='red-neural-vs-blue-rules'&&Array.isArray(saved.rounds)){trainingSession=saved;showTrainingResults();}}catch(_){}
+    setupBuildingButtons();
+    setupUnitButtons();
+    updateUI();
+    requestAnimationFrame(frame);
+})();
+
+</script></body></html>

@@ -10,7 +10,24 @@
 #result{position:absolute;inset:0;background:#0e1e2bd9;display:grid;place-content:center;text-align:center;z-index:4}#result[hidden]{display:none}#result button{padding:12px;background:#41647e;color:#fff;border:1px solid #82c4ff;cursor:pointer}
 @media(max-width:700px){.game-layout{grid-template-columns:1fr;grid-template-rows:minmax(240px,60vh) 1fr}.sidebar{border-left:0;border-top:1px solid #52616b}.building-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.building-button{font-size:12px}}
 
-.resource-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;white-space:nowrap;margin-bottom:12px;color:#ead398;font-size:14px;font-variant-numeric:tabular-nums}.resource-bar strong{font-weight:400}.resource-bar .low-power{color:#ff9788}.train-ai{width:100%;margin-top:16px;padding:10px;background:#365569;color:#edf6fc;border:1px solid #7597ac;border-radius:4px;cursor:pointer;font-size:13px}.building-button.ready-building{border-color:#9ee5b3;background:#335a4a}
+.resource-bar{
+    display:flex;align-items:center;
+    justify-content:space-between;
+    gap:12px;white-space:nowrap;margin-bottom:12px;
+    color:#ead398;font-size:14px;font-variant-numeric:tabular-nums
+}
+.resource-bar strong{
+    font-weight:400
+    }
+.resource-bar #power-title,
+.resource-bar #power {
+        color: #7ee787 
+}
+.low-power #power-title,
+.low-power #power{
+    color:#ff9788
+}
+.train-ai{width:100%;margin-top:16px;padding:10px;background:#365569;color:#edf6fc;border:1px solid #7597ac;border-radius:4px;cursor:pointer;font-size:13px}.building-button.ready-building{border-color:#9ee5b3;background:#335a4a}
 .match-controls{display:flex;gap:8px}.match-controls 
 .train-ai{flex:1;min-width:0}#trainingResults{
 white-space:pre-line;
@@ -24,7 +41,15 @@ min-height:54px}</style></head><body><div class="game-layout">
 <canvas id="battlefield" width="1600" height="900" aria-label="RTS AI">RTS AI</canvas>
 <div id="result" hidden><h2 id="resultText"></h2><button id="playAgain">再玩一場</button></div>
 </main>
-<aside class="sidebar"><div class="resource-bar"><span>資金<strong id="funds">$1,600</strong></span><span>電力 <strong id="power">0/0</strong></span></div><div class="sidebar-tabs"><button id="buildingTab" class="sidebar-tab active" aria-pressed="true">建築</button><button id="unitTab" class="sidebar-tab" aria-pressed="false">單位</button></div><div id="buildingPanel"><div class="building-grid"><button id="buildPowerPlant" class="building-button">發電廠</button><button id="buildBarracks" class="building-button">兵營</button><button id="buildRefinery" class="building-button">精煉廠</button><button id="buildAirTower" class="building-button">航空塔</button><button id="buildFactory" class="building-button">戰車工廠</button></div></div><div id="unitPanel" hidden><div id="unitButtons" class="building-grid"></div></div><div class="match-controls"><button id="pauseGame" class="train-ai">暫停</button><button id="restartGame" class="train-ai">重新開始</button></div><button id="trainAI" class="train-ai">訓練深度學習AI ×1000</button><div id="trainingResults" hidden aria-live="polite"></div></aside></div>
+<aside class="sidebar">
+    <div style="color: #ffffff; margin-bottom: 5px; text-align: center;width: 100%;"><strong id="time">00:00</strong></div>
+    <div class="resource-bar">
+        <span>資金<strong id="funds">$1,500</strong>
+        </span>
+        <span><strong id="power-title">電力</strong><strong id="power">0/0</strong>
+        </span>
+    </div>
+<div class="sidebar-tabs"><button id="buildingTab" class="sidebar-tab active" aria-pressed="true">建築</button><button id="unitTab" class="sidebar-tab" aria-pressed="false">單位</button></div><div id="buildingPanel"><div class="building-grid"><button id="buildPowerPlant" class="building-button">發電廠</button><button id="buildBarracks" class="building-button">兵營</button><button id="buildRefinery" class="building-button">精煉廠</button><button id="buildAirTower" class="building-button">航空塔</button><button id="buildFactory" class="building-button">戰車工廠</button></div></div><div id="unitPanel" hidden><div id="unitButtons" class="building-grid"></div></div><div class="match-controls"><button id="pauseGame" class="train-ai">暫停</button><button id="restartGame" class="train-ai">重新開始</button></div><button id="trainAI" class="train-ai">訓練深度學習AI ×1000</button><div id="trainingResults" hidden aria-live="polite"></div></aside></div>
 <script>
 (() => {
     "use strict";
@@ -599,21 +624,30 @@ min-height:54px}</style></head><body><div class="game-layout">
             const active=buildQueues[TEAM].find(j=>!j.ready&&hasTech(j.type,TEAM));
             const status=ready?'就緒':job?(job===active?'':'等待生產'):reason||'';
             const powerText=POWER[type]>0?'供電 +'+POWER[type]:'耗電 '+Math.abs(POWER[type]||0);
+            const timeDisplay = document.querySelector('#time');
+                if (timeDisplay) {
+                const totalSeconds = Math.floor(elapsed || 0); 
+                const minutes = Math.floor(totalSeconds / 60);
+                const seconds = totalSeconds % 60;
+            
+                const formattedMin = String(minutes).padStart(2, '0');
+                const formattedSec = String(seconds).padStart(2, '0');
+            
+                timeDisplay.textContent = `${formattedMin}:${formattedSec}`;
+            }
             if(span)span.textContent=B[type].name+' $'+COST[type]+'\n'+powerText+'\n'+status;
             button.classList.toggle('ready-building',!!ready);button.style.setProperty('--progress-angle',`${ready?360:job?Math.min(1,job.elapsed/job.duration)*360:0}deg`);button.classList.toggle('is-producing',!!ready||!!job&&job.elapsed>0);
             button.title=ready?'左鍵放置，右鍵取消並退款':'左鍵加入佇列，右鍵取消並退款';
 
-            // ======= 新增：控制建築佇列數字的顯示 =======
             const bBadge = button.querySelector('.queue-count');
             if (bBadge) {
                 bBadge.hidden = !jobs.length;   // 如果佇列沒東西就隱藏數字
-                bBadge.textContent = jobs.length; // 填入當前佇列長度（含準備放置的）
+                bBadge.textContent = jobs.length; // 填入當前佇列長度
             }
         }
         for(const [type,ui] of uis){
             const queue=q(type),job=queue[0],progress=job?Math.min(1,job.elapsed/job.duration):0;
             const p=producer(type),reason=!p?'需要'+B[U[type].building].name:cash[0]<COST[type]?'資金不足':queue.length>=20?'佇列已滿':'';
-            // Use aria-disabled so right-click cancellation still works when cash is exhausted.
             ui.button.setAttribute('aria-disabled',String(training||!!reason));
             ui.button.classList.toggle('unavailable',training||!!reason);
             ui.button.style.setProperty('--progress-angle',`${progress*360}deg`);
@@ -1614,11 +1648,11 @@ min-height:54px}</style></head><body><div class="game-layout">
     function drawMines(){
         for(const m of mines){
             ctx.save();ctx.translate(m.x,m.y);
-            ctx.fillStyle=m.ore>0?'#2e2e2e':'##9b9b9b';ctx.beginPath();ctx.arc(0,0,75,0,Math.PI*2);ctx.fill();
+            ctx.fillStyle=m.ore>0?'#1F1F1F':'#9b9b9b';ctx.beginPath();ctx.arc(0,0,75,0,Math.PI*2);ctx.fill();
             const count=Math.ceil(m.ore/m.maxOre*32);
             for(let i=0;i<count;i++){
                 const a=i*2.39996,r=9+Math.sqrt(i/32)*52,x=Math.cos(a)*r,y=Math.sin(a)*r;
-                ctx.fillStyle=i%3===0?'#595959':i%3===1?'#d6d6d6':'#8d8d8d';
+                ctx.fillStyle=i%3===0?'#454545':i%3===1?'#949494':'#707070';
                 ctx.beginPath();
                 for(let j=0;j<6;j++){
                     const a=j*Math.PI/3,px=x+9*Math.cos(a),py=y+9*Math.sin(a);
